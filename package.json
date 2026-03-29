@@ -1,0 +1,20 @@
+{
+  "name": "elemental-clash-node",
+  "version": "1.0.0",
+  "description": "Elemental Clash 게임노드 — 서버 운영자용",
+  "type": "module",
+  "scripts": {
+    "start": "npx tsx src/index.ts",
+    "typecheck": "npx tsc --noEmit"
+  },
+  "dependencies": {
+    "nat-upnp": "^1.1.1",
+    "tsx": "^4.21.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/nat-upnp": "^1.1.5",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  }
+}
