@@ -1,9 +1,9 @@
 /**
- * 프로스트 — 얼음의 기사
+ * 프로스트 — 거점을 얼음 요새로 만드는 동장군
  * 역할: 탱커 (얼음)
  *
- * 얼음 갑옷으로 버티며 적을 둔화/빙결시키는 탱커.
- * 빙벽으로 전선 사수, 얼음 돌진으로 진입.
+ * 주변 타일이 자동으로 freeze(동토의 영역), 빙벽으로 진입로 차단.
+ * 얼음 돌진으로 진입, 빙결 파동으로 광역 CC. 궁극기로 절대영도.
  */
 
 import type { CharSheet } from './char-sheet.js';
@@ -16,7 +16,7 @@ const frost: CharSheet = {
   combatRole: 'tank',
   element: 'water',
   icon: '❄️',
-  desc: '얼음 기사, 빙결, 둔화',
+  desc: '자동 동결, 빙벽, 둔화',
   color: '#88CCFF',
   colorAlt: '#5599CC',
 
@@ -29,6 +29,21 @@ const frost: CharSheet = {
   attackDamage: 8,
   attackSpeed: 0.6,
   attackRange: 1.8,
+
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '동토의 영역',
+      icon: '🧊',
+      desc: '반경 2칸 타일이 3초에 1칸씩 freeze로 변환. freeze 위에서 방어력 25%↑.',
+      trigger: { type: 'aura', radius: 2 },
+      effects: {
+        fieldGenerate: { fieldEffect: 'freeze', radius: 2, interval: 3 },
+        defenseMult: 0.75,   // freeze 위에서 25% 피해 감소
+      },
+      vfx: { cast: 'cm_freezing' },
+    },
+  ],
 
   // ── 스킬 ──
   skills: [
@@ -43,7 +58,7 @@ const frost: CharSheet = {
       aoe: 0,
       attackAngle: Math.PI,
       windupTime: 0.15,
-      recoveryTime: 0,          // dash = no recovery
+      recoveryTime: 0,
       fieldEffect: 'freeze',
       vfx: { cast: 'cm_freezing', hit: 'sp_impact_frost' },
     },
@@ -57,26 +72,25 @@ const frost: CharSheet = {
       stunDuration: 1.5,
       aoe: 5,
       windupTime: 0.2,
-      recoveryTime: 0,          // telegraph = no recovery
+      recoveryTime: 0,
       fieldEffect: 'freeze',
       telegraphDelay: 0.3,
       vfx: { cast: 'cm_bluefire', hit: 'cm_freezing', scale: 1.5 },
     },
     {
-      name: '서리 투척',
-      type: 'damage',
+      name: '빙벽',
+      type: 'cc',
       cooldown: 5,
       initialCooldown: 1,
-      damage: 18,
-      range: 8,
-      stunDuration: 0.5,
+      damage: 0,
+      range: 6,
+      stunDuration: 0,
       aoe: 0,
-      projectileSpeed: 16,
-      tracking: 'none',
       windupTime: 0.2,
       recoveryTime: 0.15,
       fieldEffect: 'freeze',
-      vfx: { hit: 'cm_freezing' },
+      summon: { hp: 60, duration: 5, blocksMovement: true },   // 빙벽: 내구도 60, 5초, 이동 차단
+      vfx: { cast: 'cm_freezing', hit: 'cm_bluefire', scale: 1.2 },
     },
   ],
 

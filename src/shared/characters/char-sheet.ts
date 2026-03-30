@@ -19,18 +19,83 @@ export interface SkillVfx {
   scale?: number;
 }
 
+// ─── 필드 이펙트 타입 ───
+
+/** 기본 필드 + 연계 반응 필드 */
+export type FieldEffectType =
+  | 'ignite' | 'freeze' | 'water' | 'grow' | 'mud' | 'shield'
+  // 연계 반응으로만 생성
+  | 'fog'      // 수증기/안개 — 시야 차단
+  | 'ice'      // 빙판 — 미끄러짐
+  | 'lava'     // 용암 — 고데미지 장판
+  | 'swamp'    // 수렁 — 강화 진흙
+  | 'pollen'   // 꽃가루 — 재채기
+  | 'electric'; // 전자기장 — 감전
+
+// ─── 패시브 스킬 정의 ───
+
+/** 패시브 발동 조건 */
+export type PassiveTrigger =
+  | { type: 'on_field'; fieldTypes: FieldEffectType[] }   // 특정 장판 위에 있을 때
+  | { type: 'on_hit_taken'; chance?: number }             // 피격 시 (확률)
+  | { type: 'on_kill' }                                   // 적 처치/어시 시
+  | { type: 'on_skill_hit'; stacks: number }              // 스킬 N회 적중 시
+  | { type: 'stationary'; duration: number }              // N초 정지 시
+  | { type: 'aura'; radius: number }                      // 주변 상시
+  | { type: 'directional' }                               // 방향 기반 (에리스)
+  | { type: 'always' }                                    // 상시 (블레이즈 불꽃잔상)
+  | { type: 'low_hp'; threshold: number }                 // HP 비율 이하 시
+  | { type: 'backstab' };                                 // 적 뒤쪽 공격 시
+
+/** 패시브 효과 */
+export interface PassiveEffect {
+  // 자기 자신
+  speedMult?: number;         // 이속 배율
+  damageMult?: number;        // 공격력 배율
+  defenseMult?: number;       // 피해감소 배율
+  healMult?: number;          // 힐량 배율
+  hpRegen?: number;           // 초당 HP 회복
+  cooldownMult?: number;      // 쿨타임 배율 (0.8 = 20% 감소)
+  stealth?: boolean;          // 은신
+  // 적에게
+  enemySpeedMult?: number;    // 적 이속 배율
+  reflectDamage?: number;     // 반사 데미지
+  extraStun?: number;         // 추가 스턴
+  // 아군에게
+  allySpeedMult?: number;     // 아군 이속 배율
+  // 특수 메커니즘
+  trail?: { fieldEffect: FieldEffectType; duration: number; damage: number };
+  summon?: { type: string; damage: number; duration: number; maxStacks: number };
+  bowling?: { damage: number; knockback: number; stunDuration: number };
+  chainAttack?: { targets: number; damageRatio: number };
+  fieldGenerate?: { fieldEffect: FieldEffectType; radius: number; interval: number };
+  // 효과 조건
+  duration?: number;          // 효과 지속 (킬 보상 등)
+  cooldown?: number;          // 패시브 재발동 쿨
+}
+
+/** 패시브 스킬 시트 */
+export interface PassiveSheet {
+  name: string;
+  icon: string;
+  desc: string;               // 툴팁 설명
+  trigger: PassiveTrigger;
+  effects: PassiveEffect;
+  vfx?: SkillVfx;
+}
+
 // ─── 스킬 정의 ───
 
 export interface SkillSheet {
   name: string;
-  type: 'damage' | 'heal' | 'field' | 'cc' | 'buff';
+  type: 'damage' | 'heal' | 'field' | 'cc' | 'buff' | 'trap' | 'mobility';
   cooldown: number;         // 쿨타임 (초)
   initialCooldown: number;  // 게임 시작 시 남은 쿨타임
   damage: number;           // 양수=피해, 음수=회복
   range: number;            // 사거리 (타일)
   stunDuration: number;     // 스턴 지속 (초), 0=없음
   aoe: number;              // 범위 (0=단일 대상)
-  fieldEffect?: 'ignite' | 'freeze' | 'water' | 'grow' | 'mud' | 'shield';
+  fieldEffect?: FieldEffectType;
   // 투사체
   projectileSpeed?: number;
   tracking?: 'none' | 'loose';
@@ -40,6 +105,19 @@ export interface SkillSheet {
   attackAngle?: number;     // 공격 범위 각도 (라디안)
   windupTime?: number;      // 선딜 (초) — 시전 시작 ~ 효과 발동까지 대기 (이동 불가)
   recoveryTime?: number;    // 후딜 (초) — 효과 발동 후 ~ 다음 행동까지 경직
+  // 추가 CC 효과 (스턴 외)
+  dot?: { damage: number; duration: number };     // 독/화상 DoT
+  slow?: { ratio: number; duration: number };     // 슬로우
+  root?: number;            // 속박 지속 (이동불가, 스킬가능)
+  knockup?: number;         // 넉업 지속 (공중, 피격뎀 20%↑)
+  // 트랩/설치물
+  trap?: { count: number; lifetime: number; hidden?: boolean };
+  // 텔레포트/도약
+  teleport?: { stealthDuration?: number };
+  // 소환물 (빙벽 등)
+  summon?: { hp: number; duration: number; blocksMovement: boolean };
+  // 특수: ignite 소비 증폭 (블레이즈 화염 선회)
+  consumeField?: { fieldEffect: FieldEffectType; bonusDamage: number };
   // 버프 효과 (type='buff' 또는 fieldEffect='shield' 시 적용)
   buffEffects?: {
     speedMult?: number;       // 이속 배율 (1.4 = 40% 증가)
@@ -107,6 +185,9 @@ export interface CharSheet {
   attackDamage: number;
   attackSpeed: number;      // 초당 공격 횟수
   attackRange: number;      // 사거리 (타일)
+
+  // ── 패시브 (0~2개) ──
+  passives: PassiveSheet[];
 
   // ── 스킬 ──
   skills: SkillSheet[];

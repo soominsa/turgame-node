@@ -1,9 +1,9 @@
 /**
- * 루미나 — 빛의 암살자
+ * 루미나 — 빛의 연쇄 암살자
  * 역할: 암살 (고속 근접)
  *
- * 최고 이동속도와 공격속도로 적 후방을 기습.
- * 섬광으로 순간 폭딜, 실명으로 범위 스턴. 궁극기로 시간 정지.
+ * 그림자 도약으로 적 뒤를 잡고 백어택(1.4배), 킬 시 이속+회복으로 연쇄 암살.
+ * 섬광으로 순간 폭딜, 섬광탄으로 범위 스턴. 궁극기로 시간 정지.
  */
 
 import type { CharSheet } from './char-sheet.js';
@@ -16,7 +16,7 @@ const lumina: CharSheet = {
   combatRole: 'melee',
   element: 'nature',
   icon: '⚔',
-  desc: '고속 근접, 섬광',
+  desc: '텔레포트 암살, 백어택, 연쇄 킬',
   color: '#FFCC44',
   colorAlt: '#CCAA22',
 
@@ -29,6 +29,33 @@ const lumina: CharSheet = {
   attackDamage: 25,
   attackSpeed: 1.8,
   attackRange: 2.5,
+
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '암살자의 혈기',
+      icon: '💀',
+      desc: '킬/어시스트 시 3초간 이속 40%↑ + HP 20 회복. 연쇄 킬 시 효과 갱신.',
+      trigger: { type: 'on_kill' },
+      effects: {
+        speedMult: 1.4,
+        hpRegen: 20,    // 즉시 회복
+        duration: 3,
+      },
+      vfx: { cast: 'cm_brightfire' },
+    },
+    {
+      name: '그림자 접근',
+      icon: '🗡️',
+      desc: '적 뒤쪽(180도)에서 첫 공격 시 데미지 1.4배 + 0.3초 추가 스턴.',
+      trigger: { type: 'backstab' },
+      effects: {
+        damageMult: 1.4,
+        extraStun: 0.3,
+      },
+      vfx: { hit: 'pm_dark' },
+    },
+  ],
 
   // ── 스킬 ──
   skills: [
@@ -43,26 +70,25 @@ const lumina: CharSheet = {
       aoe: 0,
       attackAngle: Math.PI * 0.4,
       windupTime: 0.1,
-      recoveryTime: 0,          // dash = no recovery
+      recoveryTime: 0,
       vfx: { cast: 'cm_brightfire', hit: 'cm_magichit' },
     },
     {
-      name: '그림자 표창',
-      type: 'cc',
+      name: '그림자 도약',
+      type: 'mobility',
       cooldown: 5,
       initialCooldown: 1,
-      damage: 20,
-      range: 10,
-      stunDuration: 1.0,
+      damage: 0,
+      range: 6,
+      stunDuration: 0,
       aoe: 0,
-      projectileSpeed: 25,
-      tracking: 'loose',
-      windupTime: 0.12,
-      recoveryTime: 0.12,
-      vfx: { hit: 'pm_dark' },
+      windupTime: 0.05,
+      recoveryTime: 0.1,
+      teleport: { stealthDuration: 0.5 },
+      vfx: { cast: 'pm_dark', hit: 'spe_smoke' },
     },
     {
-      name: '실명',
+      name: '섬광탄',
       type: 'cc',
       cooldown: 8,
       initialCooldown: 4,
@@ -71,7 +97,7 @@ const lumina: CharSheet = {
       stunDuration: 2.5,
       aoe: 4,
       windupTime: 0.12,
-      recoveryTime: 0,          // telegraph = no recovery
+      recoveryTime: 0,
       telegraphDelay: 0.4,
       vfx: { cast: 'cm_brightfire', hit: 'pm_dark', scale: 1.2 },
     },

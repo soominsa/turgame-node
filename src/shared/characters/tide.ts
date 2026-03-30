@@ -30,6 +30,22 @@ const tide: CharSheet = {
   attackSpeed: 0.5,
   attackRange: 9,
 
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '조류 지배',
+      icon: '🌀',
+      desc: 'water 장판 위에서 쿨타임 20% 감소. 물 위 아군 이속 10%↑, 적 이속 15%↓.',
+      trigger: { type: 'on_field', fieldTypes: ['water'] },
+      effects: {
+        cooldownMult: 0.8,
+        allySpeedMult: 1.1,
+        enemySpeedMult: 0.85,
+      },
+      vfx: { cast: 'cm_bubbles' },
+    },
+  ],
+
   // ── 스킬 ──
   skills: [
     {

@@ -1,4 +1,4 @@
-import type { ElementType } from './characters/char-sheet.js';
+import type { ElementType, FieldEffectType, PassiveSheet } from './characters/char-sheet.js';
 
 export interface Entity {
   id: string;
@@ -18,6 +18,7 @@ export interface Entity {
   attackRange: number;
   attackCooldown: number;
   skills: Skill[];
+  passives: PassiveSheet[];
   color: string;
   size: number;
   stunTimer: number;
@@ -68,8 +69,8 @@ export interface Skill {
   range: number;
   stunDuration: number;
   aoe: number;
-  type: 'damage' | 'heal' | 'field' | 'cc' | 'buff';
-  fieldEffect?: 'ignite' | 'freeze' | 'water' | 'grow' | 'mud' | 'shield';
+  type: 'damage' | 'heal' | 'field' | 'cc' | 'buff' | 'trap' | 'mobility';
+  fieldEffect?: FieldEffectType;
   // 투사체 속성 (undefined = 즉시 적중)
   projectileSpeed?: number;   // 타일/초. 설정 시 투사체로 발사
   tracking?: 'none' | 'loose'; // 유도 방식
@@ -78,6 +79,19 @@ export interface Skill {
   attackAngle?: number;        // 공격 범위 각도 (라디안). 넓을수록 방향 관대. 미설정 시 Math.PI (180도)
   windupTime?: number;         // 선딜 (초). 스킬 시전 시작 ~ 실제 효과 적용까지 대기 시간
   recoveryTime?: number;       // 후딜 (초). 스킬 효과 적용 후 ~ 다음 행동 가능까지 경직 시간
+  // 추가 CC 효과
+  dot?: { damage: number; duration: number };      // 독/화상 DoT
+  slow?: { ratio: number; duration: number };      // 슬로우
+  root?: number;               // 속박 지속 (이동불가, 스킬가능)
+  knockup?: number;            // 넉업 지속 (공중, 피격뎀 20%↑)
+  // 트랩/설치물
+  trap?: { count: number; lifetime: number; hidden?: boolean };
+  // 텔레포트/도약
+  teleport?: { stealthDuration?: number };
+  // 소환물 (빙벽 등)
+  summon?: { hp: number; duration: number; blocksMovement: boolean };
+  // 필드 소비 증폭 (블레이즈 화염 선회)
+  consumeField?: { fieldEffect: FieldEffectType; bonusDamage: number };
   buffEffects?: {
     speedMult?: number;
     damageMult?: number;

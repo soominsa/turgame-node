@@ -1,9 +1,9 @@
 /**
- * 그로브 — 숲의 수호자
+ * 그로브 — 닿는 곳마다 생명이 자라는 숲의 어머니
  * 역할: 힐러 (원거리)
  *
- * 아군을 치유하고 빙결/덩굴벽으로 적을 제어.
- * 대순환으로 광역 힐+스턴. 궁극기로 아군 대규모 회복+무적.
+ * 힐 시 grow 타일 자동 생성(생명의 순환), grow 위 힐 대상 추가 회복.
+ * 생명의 씨앗 설치로 지연 힐+grow. 궁극기로 아군 무적+대량 회복.
  */
 
 import type { CharSheet } from './char-sheet.js';
@@ -16,7 +16,7 @@ const grove: CharSheet = {
   combatRole: 'support',
   element: 'water',
   icon: '💚',
-  desc: '힐, 빙결, 덩굴벽',
+  desc: '힐+grow 생성, 씨앗, 빙결',
   color: '#22AAAA',
   colorAlt: '#118888',
 
@@ -29,6 +29,21 @@ const grove: CharSheet = {
   attackDamage: 5,
   attackSpeed: 0.5,
   attackRange: 9,
+
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '생명의 순환',
+      icon: '🌱',
+      desc: '힐 시 대상 발밑에 grow 타일 생성 (3초). grow 위 힐 대상은 추가 HP 15 회복.',
+      trigger: { type: 'always' },
+      effects: {
+        fieldGenerate: { fieldEffect: 'grow', radius: 0, interval: 0 },  // 힐 시 자동
+        healMult: 1.0,   // grow 위 대상 추가 15 (엔진에서 처리)
+      },
+      vfx: { cast: 'pm_heal', hit: 'pm_earth1' },
+    },
+  ],
 
   // ── 스킬 ──
   skills: [
@@ -56,24 +71,26 @@ const grove: CharSheet = {
       stunDuration: 1.5,
       aoe: 3,
       windupTime: 0.12,
-      recoveryTime: 0,          // telegraph = no recovery
+      recoveryTime: 0,
       fieldEffect: 'freeze',
       telegraphDelay: 0.6,
       vfx: { hit: 'cm_freezing' },
     },
     {
-      name: '가시 덩굴',
-      type: 'damage',
+      name: '생명의 씨앗',
+      type: 'heal',
       cooldown: 5,
       initialCooldown: 0,
-      damage: 10,
+      damage: -25,            // 발아 시 범위 힐 25
       range: 8,
-      stunDuration: 0.5,
-      aoe: 4,
+      stunDuration: 0,
+      aoe: 3,
       windupTime: 0.12,
-      recoveryTime: 0,          // telegraph = no recovery
-      telegraphDelay: 0.4,
-      vfx: { hit: 'pm_earth2' },
+      recoveryTime: 0,
+      telegraphDelay: 3.0,    // 3초 후 발아
+      fieldEffect: 'grow',
+      slow: { ratio: 0.3, duration: 1 },   // 적이 밟으면 슬로우
+      vfx: { cast: 'pm_earth1', hit: 'pm_heal', scale: 1.2 },
     },
     {
       name: '대순환',
@@ -85,7 +102,7 @@ const grove: CharSheet = {
       stunDuration: 1.5,
       aoe: 8,
       windupTime: 0.08,
-      recoveryTime: 0,          // telegraph = no recovery
+      recoveryTime: 0,
       telegraphDelay: 0.8,
       vfx: { cast: 'cm_casting', hit: 'pm_heal', scale: 1.3 },
     },

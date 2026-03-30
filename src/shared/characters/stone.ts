@@ -30,6 +30,20 @@ const stone: CharSheet = {
   attackSpeed: 0.7,
   attackRange: 1.8,
 
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '볼링 본능',
+      icon: '🎳',
+      desc: '빙판(ice) 위 이동 시 제동 불가 직선 활주. 접촉 적: 넉백 3 + 30뎀 + 스턴 0.8초. 아군은 넉백만.',
+      trigger: { type: 'on_field', fieldTypes: ['ice'] },
+      effects: {
+        bowling: { damage: 30, knockback: 3, stunDuration: 0.8 },
+      },
+      vfx: { hit: 'fz_rocks', scale: 1.5 },
+    },
+  ],
+
   // ── 스킬 ──
   skills: [
     {

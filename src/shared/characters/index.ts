@@ -11,7 +11,7 @@
  *       완전 자동화 가능하지만, 현재는 명시적 import으로 안정성 확보
  */
 
-import type { CharSheet, SkillSheet } from './char-sheet.js';
+import type { CharSheet, SkillSheet, PassiveSheet } from './char-sheet.js';
 import type { Entity, Skill } from '../combat-entities.js';
 
 // ─── 캐릭터 시트 등록 (파일 추가 시 여기에 한 줄 추가) ───
@@ -60,6 +60,15 @@ function skillFromSheet(s: SkillSheet): Skill {
     windupTime: s.windupTime,
     recoveryTime: s.recoveryTime,
     buffEffects: s.buffEffects,
+    // 새 필드들
+    dot: s.dot,
+    slow: s.slow,
+    root: s.root,
+    knockup: s.knockup,
+    trap: s.trap,
+    teleport: s.teleport,
+    summon: s.summon,
+    consumeField: s.consumeField,
     vfx: s.vfx,
   };
 }
@@ -114,6 +123,7 @@ export function createEntity(sheet: CharSheet, team: 'A' | 'B', x: number, y: nu
     elemDebuff: 0,
     elemChargeTimer: 0,
     elemChargeType: null,
+    passives: sheet.passives,
     skills: sheet.skills.map(skillFromSheet),
   };
 }
@@ -288,4 +298,4 @@ export const ULT_CHARGE = {
 };
 
 // re-export for convenience
-export type { CharSheet, SkillSheet } from './char-sheet.js';
+export type { CharSheet, SkillSheet, PassiveSheet, FieldEffectType } from './char-sheet.js';

@@ -1,9 +1,9 @@
 /**
- * 쏜 — 가시의 전사
+ * 쏜 — 건드리면 큰일나는 가시 덤불
  * 역할: 근딜 (자연 근접)
  *
- * 가시 갑옷으로 반격하며 싸우는 생존형 근딜.
- * 가시 찌르기로 단일 폭딜, 덩굴 속박으로 CC.
+ * 근접 피격 시 반사 데미지(가시 반사) + 확률적 벌 소환(벌통).
+ * 가시 덫을 설치하고 덩굴 속박으로 적을 끌어와 처치.
  */
 
 import type { CharSheet } from './char-sheet.js';
@@ -16,7 +16,7 @@ const thorn: CharSheet = {
   combatRole: 'melee',
   element: 'nature',
   icon: '🌿',
-  desc: '가시 전사, 반격, 속박',
+  desc: '가시 반사, 벌 소환, 덫',
   color: '#66AA33',
   colorAlt: '#448822',
 
@@ -29,6 +29,30 @@ const thorn: CharSheet = {
   attackDamage: 16,
   attackSpeed: 1.2,
   attackRange: 2.2,
+
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '가시 반사',
+      icon: '🌵',
+      desc: '근접 피격 시 공격자에게 반사 데미지 5.',
+      trigger: { type: 'on_hit_taken' },
+      effects: {
+        reflectDamage: 5,
+      },
+      vfx: { hit: 'pm_earth1' },
+    },
+    {
+      name: '벌통',
+      icon: '🐝',
+      desc: '근접 피격 시 15% 확률로 벌 소환. 벌은 5초간 적을 추적 (2뎀/초). 최대 3마리.',
+      trigger: { type: 'on_hit_taken', chance: 0.15 },
+      effects: {
+        summon: { type: 'bee', damage: 2, duration: 5, maxStacks: 3 },
+      },
+      vfx: { cast: 'pm_poison' },
+    },
+  ],
 
   // ── 스킬 ──
   skills: [
@@ -63,18 +87,19 @@ const thorn: CharSheet = {
       vfx: { cast: 'pm_poison', hit: 'pm_earth2' },
     },
     {
-      name: '가시 돌진',
-      type: 'damage',
+      name: '가시 덫',
+      type: 'trap',
       cooldown: 8,
       initialCooldown: 2,
-      damage: 22,
-      range: 5,
-      stunDuration: 0.5,
+      damage: 15,
+      range: 6,
+      stunDuration: 0,
       aoe: 0,
-      attackAngle: Math.PI,
-      windupTime: 0.1,
-      recoveryTime: 0,          // dash = no recovery
-      vfx: { cast: 'pm_earth1', hit: 'cm_weaponhit' },
+      windupTime: 0.15,
+      recoveryTime: 0.2,
+      slow: { ratio: 0.4, duration: 1.5 },                // 이속 40% 감소 1.5초
+      trap: { count: 3, lifetime: 30, hidden: true },      // 3개, 30초, grow 위 은폐
+      vfx: { cast: 'pm_earth2', hit: 'pm_earth1' },
     },
   ],
 

@@ -30,6 +30,21 @@ const aeris: CharSheet = {
   attackSpeed: 0.6,
   attackRange: 10,
 
+  // ── 패시브 ──
+  passives: [
+    {
+      name: '순풍/역풍',
+      icon: '💨',
+      desc: '마지막 스킬 방향 = 바람 방향. 순풍 아군 이속 15%↑, 역풍 적 이속 10%↓, 투사체 속도 ±20%.',
+      trigger: { type: 'directional' },
+      effects: {
+        allySpeedMult: 1.15,
+        enemySpeedMult: 0.9,
+      },
+      vfx: { cast: 'pm_wind' },
+    },
+  ],
+
   // ── 스킬 ──
   skills: [
     {

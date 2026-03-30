@@ -30,6 +30,9 @@ const breaker: CharSheet = {
   attackSpeed: 0.7,
   attackRange: 9,
 
+  // ── 패시브 (없음 — 4스킬로 승부) ──
+  passives: [],
+
   // ── 스킬 ──
   skills: [
     {
