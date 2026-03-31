@@ -15,16 +15,6 @@ export interface LobbyPlayer {
 // ─── 클라이언트 → 서버 ───
 
 export type C2S =
-  // 인증 (중앙서버 전용)
-  | { type: 'guest_login'; guestId?: string }
-  | { type: 'register'; nickname: string; password: string }
-  | { type: 'login'; nickname: string; password: string }
-  | { type: 'upgrade_account'; nickname: string; password: string }
-  | { type: 'link_wallet'; suiWallet: string }
-  // 로비 (단일서버) / 매칭 (클러스터 → 중앙서버)
-  | { type: 'create_room'; playerName: string }
-  | { type: 'join_room'; roomId: string; playerName: string }
-  | { type: 'list_rooms' }
   // 게임노드 접속 (클러스터 모드)
   | { type: 'present_ticket'; ticket: any }
   // 게임 조작
@@ -33,8 +23,8 @@ export type C2S =
   | { type: 'ready' }
   | { type: 'start_game' }         // 호스트만
   | { type: 'input'; mx: number; my: number; skills: number[]; attack: boolean }
-  // 경제 (중앙서버 전용)
-  | { type: 'get_balance' };
+  // 킵얼라이브
+  | { type: 'ping' };
 
 // ─── 서버 → 클라이언트 ───
 
@@ -169,15 +159,9 @@ export type S2C =
   | { type: 'tiles'; changes: TileChange[] }
   | { type: 'events'; list: GameEvent[] }
   | { type: 'game_over'; winner: string; scoreA: number; scoreB: number; rewards?: MatchRewardEntry[] }
-  // 인증 응답 (중앙서버)
-  | { type: 'auth_ok'; userId: string; nickname: string; authType: string; token: string; suiWallet: string | null }
-  | { type: 'auth_error'; error: string }
-  // 잔고 응답 (중앙서버)
-  | { type: 'balance'; water: number; soil: number; wood: number; heat: number; totalMatches: number }
-  // 클러스터 매칭 (중앙서버 → 클라이언트)
-  | { type: 'join_ticket'; ticket: any; nodeUrl: string }
-  | { type: 'room_list'; rooms: { roomId: string; nodeUrl: string; nodeId: string; phase: string; playerCount: number; maxPlayers: number }[] }
-  | { type: 'node_list'; nodes: { nodeId: string; region: string; playerCount: number; roomCount: number }[] };
+  // AFK 타임아웃
+  | { type: 'idle_warning'; remainingSec: number }
+  | { type: 'idle_kick' };
 
 export interface MatchRewardEntry {
   entityId: string;

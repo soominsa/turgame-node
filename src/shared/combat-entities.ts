@@ -17,6 +17,7 @@ export interface Entity {
   attackSpeed: number;
   attackRange: number;
   attackCooldown: number;
+  visionRange: number;       // 시야 범위 (타일). 스킬/공격/AI 판정에 사용
   skills: Skill[];
   passives: PassiveSheet[];
   color: string;

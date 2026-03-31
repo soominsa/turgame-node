@@ -38,6 +38,7 @@ export const HEAT_RADIATION_EMPTY = 0.3;        // 빈 칸 복사열 비율
 export const SMOKE_RANGE = 2;                   // 연기 범위 (타일)
 export const HEAT_AURA_RANGE = 2;               // 열기 범위 (타일)
 export const SMOKE_VISION_PENALTY = 0.6;        // 연기 시야 감소 비율
+export const DEFAULT_VISION_RANGE = 6;          // 기본 시야 범위 (타일)
 export const HEAT_AURA_SPEED_PENALTY = 0.8;     // 열기 이속 비율 (×0.8 = -20%)
 
 // ─── 자원순환 ───

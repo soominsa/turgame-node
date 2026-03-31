@@ -286,20 +286,25 @@ export class NavGrid {
 
   // ─── 적 탐색 ───
 
-  findNearestEnemy(e: Entity, entities: Entity[]): Entity | null {
+  findNearestEnemy(e: Entity, entities: Entity[], visCheck?: (team: 'A' | 'B', x: number, y: number) => boolean): Entity | null {
     let best: Entity | null = null, bestDist = Infinity;
     for (const t of entities) {
       if (t.team === e.team || t.dead) continue;
+      // 팀 공유 시야 체크 (visCheck 제공 시)
+      if (visCheck && !visCheck(e.team, t.x, t.y)) continue;
       const d = Math.sqrt((t.x - e.x) ** 2 + (t.y - e.y) ** 2);
       if (d < bestDist && this.hasLineOfSight(e.x, e.y, t.x, t.y)) { bestDist = d; best = t; }
     }
     return best;
   }
 
-  findNearestEnemyIgnoreWalls(e: Entity, entities: Entity[]): Entity | null {
+  /** 팀 시야 내 가장 가까운 적 (벽 무시, 거리만) */
+  findNearestEnemyIgnoreWalls(e: Entity, entities: Entity[], visCheck?: (team: 'A' | 'B', x: number, y: number) => boolean): Entity | null {
     let best: Entity | null = null, bestDist = Infinity;
     for (const t of entities) {
       if (t.team === e.team || t.dead) continue;
+      // 팀 공유 시야 체크 (visCheck 제공 시)
+      if (visCheck && !visCheck(e.team, t.x, t.y)) continue;
       const d = Math.sqrt((t.x - e.x) ** 2 + (t.y - e.y) ** 2);
       if (d < bestDist) { bestDist = d; best = t; }
     }

@@ -88,6 +88,7 @@ export function createEntity(sheet: CharSheet, team: 'A' | 'B', x: number, y: nu
     attackSpeed: sheet.attackSpeed,
     attackRange: sheet.attackRange,
     attackCooldown: 0,
+    visionRange: sheet.visionRange ?? 6,
     color: team === 'A' ? sheet.color : sheet.colorAlt,
     size: sheet.size,
     stunTimer: 0,

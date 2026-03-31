@@ -186,6 +186,9 @@ export interface CharSheet {
   attackSpeed: number;      // 초당 공격 횟수
   attackRange: number;      // 사거리 (타일)
 
+  // ── 시야 ──
+  visionRange?: number;     // 시야 범위 (타일). 미설정 시 기본값 6
+
   // ── 패시브 (0~2개) ──
   passives: PassiveSheet[];
 

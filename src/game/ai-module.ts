@@ -1,5 +1,7 @@
 import { Entity } from '../shared/combat-entities.js';
 import { getAIDifficultyConfig, type AIDifficultyConfig } from './settings-ui.js';
+import { ELEMENT_WEAKNESS, FIRE_DOT_BY_ELEMENT } from './game-engine-types.js';
+import type { ElementType } from '../shared/characters/char-sheet.js';
 
 // ─── AI가 필요로 하는 게임 월드 인터페이스 ───
 
@@ -26,7 +28,19 @@ export interface AIWorldContext {
   telegraphs: Array<{ x: number; y: number; radius: number; delay: number; owner: Entity; isHeal: boolean }>;
   /** 불타는 타일 좌표 (AI 회피용) */
   burningTiles: Array<{ x: number; y: number }>;
+  /** 타일 좌표의 원소 속성 조회 (null=중립) */
+  tileElementAt: (x: number, y: number) => ElementType | null;
+  /** 필드 크기 */
+  fieldW: number;
+  fieldH: number;
   time: number;
+  // ─── 시야 시스템 ───
+  /** 좌표가 해당 팀의 현재 시야 안인지 (fog state=2) */
+  isInVision: (team: 'A' | 'B', x: number, y: number) => boolean;
+  /** 좌표가 해당 팀에게 탐험된 적 있는지 (fog state>=1) */
+  isExplored: (team: 'A' | 'B', x: number, y: number) => boolean;
+  /** 미탐험 타일 중 가장 가까운 것 찾기 */
+  findNearestUnexplored: (e: Entity) => { x: number; y: number } | null;
   // 유틸 함수 (conquest-scene에서 주입)
   hasLineOfSight: (x1: number, y1: number, x2: number, y2: number) => boolean;
   isWallAt: (x: number, y: number) => boolean;
@@ -51,6 +65,11 @@ export interface AIState {
   wanderAngle: number;
   lockedGoal: { x: number; y: number; until: number } | null;
   lastHp: number; // 타격 감지용
+  // 시야 기반 탐험 상태
+  exploreTarget: { x: number; y: number } | null;  // 현재 탐험 목표
+  knownPointCount: number;   // 발견한 거점 수
+  knownEnemyCount: number;   // 시야 내 발견한 적 수
+  lastExploreTime: number;   // 마지막 탐험 목표 갱신 시각
 }
 
 const aiStrategies = new Map<string, AIState>();
@@ -71,6 +90,10 @@ function getAIState(e: Entity): AIState {
       wanderAngle: Math.random() * Math.PI * 2,
       lockedGoal: null,
       lastHp: 0,
+      exploreTarget: null,
+      knownPointCount: 0,
+      knownEnemyCount: 0,
+      lastExploreTime: 0,
     });
   }
   return aiStrategies.get(e.id)!;
@@ -139,15 +162,40 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
     }
   }
 
-  // 불 타일 회피: 현재 서있는 곳 또는 바로 옆이 불타고 있으면 이탈
+  // 불 타일 회피: 속성 인식도에 따라 차등 대응
   if (ctx.burningTiles && ctx.burningTiles.length > 0) {
-    const ex = Math.floor(e.x), ey = Math.floor(e.y);
-    for (const bt of ctx.burningTiles) {
-      const dx = bt.x - ex, dy = bt.y - ey;
-      if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) {
-        // 불 타일 위에 있거나 바로 인접 → 반대 방향으로 이탈
-        ctx.moveAway(e, bt.x + 0.5, bt.y + 0.5, 1.2);
-        return;
+    const fireImmune = cfg.fireAvoidSmart && e.element === 'fire';
+    // 불 속성 캐릭터는 불 타일 면역 → 회피 안 함 (보통/어려움만)
+    if (!fireImmune) {
+      const ex = Math.floor(e.x), ey = Math.floor(e.y);
+      // 어려움: 불 DOT가 높은 속성일수록 더 넓은 범위에서 회피
+      const fireDot = FIRE_DOT_BY_ELEMENT[e.element] ?? 3;
+      const avoidRange = cfg.tileAwareness >= 1.0 ? (fireDot >= 4 ? 2 : 1) : 1;
+      for (const bt of ctx.burningTiles) {
+        const dx = bt.x - ex, dy = bt.y - ey;
+        if (Math.abs(dx) <= avoidRange && Math.abs(dy) <= avoidRange) {
+          const urgency = cfg.tileAwareness >= 1.0 ? 1.5 : 1.2;
+          ctx.moveAway(e, bt.x + 0.5, bt.y + 0.5, urgency);
+          return;
+        }
+      }
+    }
+  }
+
+  // 상극 타일 회피 (보통/어려움): 현재 밟고 있는 타일이 약점 속성이면 이탈
+  if (cfg.avoidWeaknessTile) {
+    const curTileElem = ctx.tileElementAt(Math.floor(e.x), Math.floor(e.y));
+    const weakness = ELEMENT_WEAKNESS[e.element];
+    if (curTileElem && curTileElem === weakness) {
+      // 약점 타일 위에 서있음 → 전투 중이 아닐 때 이탈, 전투 중이면 확률적 이탈
+      const inCombat = !!pickTarget(e, ai.strategy, ctx);
+      const shouldEvade = !inCombat || (cfg.tileAwareness >= 1.0 ? Math.random() < 0.7 : Math.random() < 0.3);
+      if (shouldEvade) {
+        const safeTile = findNearestSafeTile(e, ctx, cfg);
+        if (safeTile) {
+          ctx.moveToward(e, safeTile.x + 0.5, safeTile.y + 0.5);
+          return;
+        }
       }
     }
   }
@@ -217,11 +265,49 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
     if (shouldUnlock) ai.lockedGoal = null;
   }
 
-  // 새 목표 설정 (전투 중이면 목표 안 잡음 — 전투 로직이 처리)
+  // ─── 시야 기반 우선순위 목표 설정 ───
+  // 우선순위: 적 발견 > 거점 점령 > 미탐험 탐색 > 랜덤 이동
+  // 난이도별: 쉬움은 전지적 시점, 보통/어려움은 시야 제한
   if (!ai.lockedGoal && !target) {
-    if (goalPt) {
+    // 시야 내 발견한 거점/적 상황 업데이트
+    const visiblePoints = ctx.points.filter(p => ctx.isInVision(e.team, p.x, p.y) || !cfg.visionAwareGoal);
+    const exploredPoints = ctx.points.filter(p => ctx.isExplored(e.team, p.x, p.y) || !cfg.visionAwareGoal);
+    ai.knownPointCount = exploredPoints.length;
+    ai.knownEnemyCount = ctx.entities.filter(t => t.team !== e.team && !t.dead &&
+      Math.sqrt((t.x - e.x) ** 2 + (t.y - e.y) ** 2) <= e.visionRange).length;
+
+    // 1) 거점이 있으면 거점으로
+    if (goalPt && (ctx.isExplored(e.team, goalPt.x, goalPt.y) || !cfg.visionAwareGoal)) {
       ai.lockedGoal = { x: goalPt.x, y: goalPt.y, until: ctx.time + 8 + Math.random() * 5 };
-    } else {
+      ai.exploreTarget = null;
+    }
+    // 2) 거점 없고 탐험 활성화 → 미탐험 지역 탐색
+    else if (cfg.visionExplore && !ai.exploreTarget && ctx.time - ai.lastExploreTime > 2) {
+      const unexplored = ctx.findNearestUnexplored(e);
+      if (unexplored) {
+        ai.exploreTarget = unexplored;
+        ai.lastExploreTime = ctx.time;
+        ai.lockedGoal = { x: unexplored.x + 0.5, y: unexplored.y + 0.5, until: ctx.time + 6 };
+      }
+    }
+    // 3) 탐험 목표가 있으면 계속 이동
+    else if (ai.exploreTarget) {
+      const eDist = Math.sqrt((e.x - ai.exploreTarget.x) ** 2 + (e.y - ai.exploreTarget.y) ** 2);
+      if (eDist < 2 || ctx.isExplored(e.team, ai.exploreTarget.x, ai.exploreTarget.y)) {
+        // 도착 또는 이미 탐험됨 → 새 목표
+        ai.exploreTarget = null;
+        const nextUnexplored = ctx.findNearestUnexplored(e);
+        if (nextUnexplored) {
+          ai.exploreTarget = nextUnexplored;
+          ai.lastExploreTime = ctx.time;
+          ai.lockedGoal = { x: nextUnexplored.x + 0.5, y: nextUnexplored.y + 0.5, until: ctx.time + 6 };
+        }
+      } else {
+        ai.lockedGoal = { x: ai.exploreTarget.x + 0.5, y: ai.exploreTarget.y + 0.5, until: ctx.time + 6 };
+      }
+    }
+    // 4) 그 외: 적 방향으로 이동 (시야 밖이어도 대략적 방향)
+    else {
       const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
       if (anyEnemy) {
         ai.lockedGoal = { x: anyEnemy.x, y: anyEnemy.y, until: ctx.time + 3 };
@@ -283,7 +369,13 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
 // ─── 타겟 선택 ───
 
 function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entity | null {
-  const visible = ctx.entities.filter(t => t.team !== e.team && !t.dead && ctx.hasLineOfSight(e.x, e.y, t.x, t.y));
+  const cfg = getAIDifficultyConfig();
+  const visible = ctx.entities.filter(t => {
+    if (t.team === e.team || t.dead) return false;
+    // 팀 공유 시야 밖 무시 (보통/어려움) — 동료가 밝혔으면 타겟 가능
+    if (cfg.visionAwareTarget && !ctx.isInVision(e.team, t.x, t.y)) return false;
+    return ctx.hasLineOfSight(e.x, e.y, t.x, t.y);
+  });
   if (visible.length === 0) return null;
 
   // ── 협공 판단: 아군이 이미 공격 중인 적을 우선 타겟 ──
@@ -321,7 +413,7 @@ function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entit
 
     // 협공 보너스: 아군이 이미 공격 중인 적 +30
     const allyCount = allyTargets.get(t.id) || 0;
-    if (allyCount > 0) score += getAIDifficultyConfig().coopBonus;
+    if (allyCount > 0) score += cfg.coopBonus;
 
     // 근접→원거리 타겟 보너스: 원거리 적에게 +20
     if (isMelee && t.attackRange > 3) score += 20;
@@ -337,6 +429,13 @@ function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entit
         break;
     }
 
+    // 어려움: 디버프 상태인 적 우선 타겟 (약점 타일 위 적)
+    if (cfg.tileAwareness >= 0.5) {
+      if (t.elemDebuff > 0) score += 15 * cfg.tileAwareness;  // 디버프 상태 적 → 추가 피해 가능
+      // 내가 버프 상태면 공격적으로
+      if (e.elemBuff > 0) score += 10 * cfg.tileAwareness;
+    }
+
     if (score > bestScore) {
       bestScore = score;
       bestTarget = t;
@@ -349,10 +448,16 @@ function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entit
 // ─── 거점 선택 ───
 
 function pickCapturePoint(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): CapturePoint | null {
-  const unowned = ctx.points.filter(p => p.owner !== e.team);
+  const cfg = getAIDifficultyConfig();
+  // 어려움: 탐험된 거점만 목표로 설정
+  const known = cfg.visionAwareGoal
+    ? ctx.points.filter(p => ctx.isExplored(e.team, p.x, p.y))
+    : ctx.points;
+  const unowned = known.filter(p => p.owner !== e.team);
   if (unowned.length === 0) {
+    if (known.length === 0) return null; // 아직 거점 미발견
     // 모든 거점이 우리 팀 → 적이 빼앗을 수 있는 거점 방어 또는 중앙 순찰
-    const byDist = ctx.points.sort((a, b) => {
+    const byDist = known.sort((a, b) => {
       const da = (a.x - e.x) ** 2 + (a.y - e.y) ** 2;
       const db = (b.x - e.x) ** 2 + (b.y - e.y) ** 2;
       return da - db;
@@ -382,9 +487,17 @@ function pickCapturePoint(e: Entity, strategy: AIStrategy, ctx: AIWorldContext):
     }
     default: {
       if (Math.random() < 0.3) return unowned[Math.floor(Math.random() * unowned.length)];
+      const cfg = getAIDifficultyConfig();
       return unowned.reduce((a, b) => {
-        const da = Math.sqrt((a.x - e.x) ** 2 + (a.y - e.y) ** 2);
-        const db = Math.sqrt((b.x - e.x) ** 2 + (b.y - e.y) ** 2);
+        let da = Math.sqrt((a.x - e.x) ** 2 + (a.y - e.y) ** 2);
+        let db = Math.sqrt((b.x - e.x) ** 2 + (b.y - e.y) ** 2);
+        // 어려움: 거점 주변 타일 속성 고려 — 유리한 타일이 많은 거점 선호
+        if (cfg.tileAwareness >= 1.0) {
+          const scoreA = evaluatePathTileScore(e, a.x, a.y, ctx, cfg);
+          const scoreB = evaluatePathTileScore(e, b.x, b.y, ctx, cfg);
+          da -= scoreA * 3;  // 유리한 경로의 거점은 가깝게 느끼도록
+          db -= scoreB * 3;
+        }
         return da < db ? a : b;
       });
     }
@@ -393,7 +506,7 @@ function pickCapturePoint(e: Entity, strategy: AIStrategy, ctx: AIWorldContext):
 
 // ─── 자원 지형 활용 ───
 
-/** 캐릭터 스킬과 매칭되는 유리한 자원 지형 찾기 */
+/** 캐릭터 스킬과 매칭되는 유리한 자원 지형 찾기 (+ 속성 타일 고려) */
 function findBeneficialTerrain(e: Entity, ctx: AIWorldContext): { x: number; y: number } | null {
   const skillTypes = new Set<string>();
   for (const s of e.skills) {
@@ -428,18 +541,122 @@ function findBeneficialTerrain(e: Entity, ctx: AIWorldContext): { x: number; y: 
   return { x: best.x, y: best.y };
 }
 
+// ─── 타일 속성 인식 AI 함수들 ───
+
+/** 가장 가까운 안전 타일 (약점 아닌) 찾기 — BFS 기반 탐색 */
+function findNearestSafeTile(e: Entity, ctx: AIWorldContext, cfg: AIDifficultyConfig): { x: number; y: number } | null {
+  const weakness = ELEMENT_WEAKNESS[e.element];
+  const ex = Math.floor(e.x), ey = Math.floor(e.y);
+  const range = Math.max(3, cfg.tileSearchRange);
+
+  let bestDist = Infinity;
+  let best: { x: number; y: number } | null = null;
+
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      const tx = ex + dx, ty = ey + dy;
+      if (tx < 0 || ty < 0 || tx >= ctx.fieldW || ty >= ctx.fieldH) continue;
+      if (ctx.isWallAt(tx, ty)) continue;
+      const tileElem = ctx.tileElementAt(tx, ty);
+      // 안전 = 약점 아닌 타일
+      if (tileElem === weakness) continue;
+      const d = dx * dx + dy * dy;
+      if (d < bestDist && d > 0) {
+        bestDist = d;
+        best = { x: tx, y: ty };
+      }
+    }
+  }
+  return best;
+}
+
+/** 동일 속성 버프 타일 찾기 — 어려움 AI가 비전투 시 적극 탐색 */
+function findBuffTile(e: Entity, ctx: AIWorldContext, cfg: AIDifficultyConfig): { x: number; y: number } | null {
+  if (!cfg.seekBuffTile) return null;
+  // 이미 버프 상태면 필요 없음
+  if (e.elemBuff > 3) return null;
+
+  const ex = Math.floor(e.x), ey = Math.floor(e.y);
+  const range = cfg.tileSearchRange;
+
+  let bestDist = Infinity;
+  let best: { x: number; y: number } | null = null;
+
+  for (let dy = -range; dy <= range; dy++) {
+    for (let dx = -range; dx <= range; dx++) {
+      const tx = ex + dx, ty = ey + dy;
+      if (tx < 0 || ty < 0 || tx >= ctx.fieldW || ty >= ctx.fieldH) continue;
+      if (ctx.isWallAt(tx, ty)) continue;
+      const tileElem = ctx.tileElementAt(tx, ty);
+      if (tileElem === e.element) {
+        const d = dx * dx + dy * dy;
+        if (d < bestDist) {
+          bestDist = d;
+          best = { x: tx, y: ty };
+        }
+      }
+    }
+  }
+  // 너무 멀면 무시 (전투 대비)
+  if (!best || bestDist > range * range) return null;
+  return best;
+}
+
+/**
+ * 타일 속성 점수 평가 — 이동 경로 평가 시 사용
+ * 양수 = 유리 (동일 속성), 음수 = 불리 (약점 속성), 0 = 중립
+ */
+function scoreTileElement(e: Entity, tileElem: ElementType | null, cfg: AIDifficultyConfig): number {
+  if (!tileElem || cfg.tileAwareness <= 0) return 0;
+  if (tileElem === e.element) return 2 * cfg.tileAwareness;         // 동일 속성 → 버프 가능
+  const weakness = ELEMENT_WEAKNESS[e.element];
+  if (tileElem === weakness) return -3 * cfg.tileAwareness;         // 약점 → 디버프 위험
+  return 0;  // 중립 타일
+}
+
+/** 두 지점 사이 경로의 타일 속성 평균 점수 (어려움 AI가 이동 결정에 활용) */
+function evaluatePathTileScore(e: Entity, tx: number, ty: number, ctx: AIWorldContext, cfg: AIDifficultyConfig): number {
+  if (cfg.tileAwareness <= 0) return 0;
+  const ex = Math.floor(e.x), ey = Math.floor(e.y);
+  const ftx = Math.floor(tx), fty = Math.floor(ty);
+  const steps = Math.max(Math.abs(ftx - ex), Math.abs(fty - ey), 1);
+  let score = 0;
+  const sampleCount = Math.min(steps, 5); // 최대 5개 샘플
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = i / sampleCount;
+    const sx = Math.floor(ex + (ftx - ex) * t);
+    const sy = Math.floor(ey + (fty - ey) * t);
+    const elem = ctx.tileElementAt(sx, sy);
+    score += scoreTileElement(e, elem, cfg);
+  }
+  return score / (sampleCount + 1);
+}
+
 // ─── 원딜 AI: 거점 위에서 카이팅, 안전 거리 유지하며 딜링 ───
 
 function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: CapturePoint | null, nx: number, ny: number, ctx: AIWorldContext) {
+  const cfg = getAIDifficultyConfig();
   const terrain = findBeneficialTerrain(e, ctx);
 
   if (target && !target.dead) {
     const distT = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
-    const kiteCfg = getAIDifficultyConfig();
-    const keepDist = e.attackRange * (kiteCfg.kitingPrecisionMin + Math.random() * (kiteCfg.kitingPrecisionMax - kiteCfg.kitingPrecisionMin));
+    const keepDist = e.attackRange * (cfg.kitingPrecisionMin + Math.random() * (cfg.kitingPrecisionMax - cfg.kitingPrecisionMin));
 
     if (distT < keepDist) {
-      // 너무 가까우면 후퇴 (거점 방향으로 후퇴 시도)
+      // 너무 가까우면 후퇴 — 어려움: 유리한 타일 방향으로 후퇴 시도
+      if (cfg.tileAwareness >= 1.0) {
+        const safeTile = findNearestSafeTile(e, ctx, cfg);
+        if (safeTile) {
+          // 적 반대쪽이면서 안전한 타일 방향으로 후퇴
+          const safeAngle = Math.atan2(safeTile.y + 0.5 - e.y, safeTile.x + 0.5 - e.x);
+          const awayAngle = Math.atan2(e.y - target.y, e.x - target.x);
+          const angleDiff = Math.abs(safeAngle - awayAngle);
+          if (angleDiff < Math.PI * 0.7) {
+            ctx.moveToward(e, safeTile.x + 0.5, safeTile.y + 0.5);
+            return;
+          }
+        }
+      }
       if (goalPt) {
         const ptDist = Math.sqrt((goalPt.x - e.x) ** 2 + (goalPt.y - e.y) ** 2);
         if (ptDist < goalPt.radius + 3) {
@@ -451,13 +668,34 @@ function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Capt
     } else if (distT > e.attackRange) {
       ctx.moveToward(e, target.x, target.y);
     } else {
-      // 적정 거리 — 약간 움직이며 딜링
+      // 적정 거리 — 어려움: 유리한 타일 위에서 전투 유지
+      if (cfg.tileAwareness >= 1.0) {
+        const curTile = ctx.tileElementAt(Math.floor(e.x), Math.floor(e.y));
+        if (curTile !== e.element) {
+          const buffTile = findBuffTile(e, ctx, cfg);
+          if (buffTile && Math.sqrt((buffTile.x - e.x) ** 2 + (buffTile.y - e.y) ** 2) < 4) {
+            ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
+            return;
+          }
+        }
+      }
       ctx.moveAway(e, target.x, target.y, 0.15);
     }
   } else if (ai.lockedGoal || goalPt) {
     const gx = ai.lockedGoal?.x ?? goalPt!.x;
     const gy = ai.lockedGoal?.y ?? goalPt!.y;
     ctx.moveToward(e, gx, gy);
+  } else if (cfg.seekBuffTile) {
+    // 어려움: 비전투 시 동일 속성 타일로 이동해 버프 충전
+    const buffTile = findBuffTile(e, ctx, cfg);
+    if (buffTile) {
+      ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
+    } else if (terrain) {
+      ctx.moveToward(e, terrain.x, terrain.y);
+    } else {
+      const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
+      if (anyEnemy) ctx.moveToward(e, anyEnemy.x, anyEnemy.y);
+    }
   } else if (terrain) {
     ctx.moveToward(e, terrain.x, terrain.y);
   } else {
@@ -469,10 +707,26 @@ function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Capt
 // ─── 근딜 AI: 적극 교전, 후방 기습, 원딜 우선 처치 ───
 
 function runMeleeAI(e: Entity, ai: AIState, target: Entity | null, goalPt: CapturePoint | null, nx: number, ny: number, ctx: AIWorldContext) {
+  const cfg = getAIDifficultyConfig();
+
   if (target && !target.dead) {
     const distT = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
 
     if (distT > e.attackRange) {
+      // 어려움: 적 위치 타일이 나에게 유리한지 평가 → 유리한 경로로 접근
+      if (cfg.tileAwareness >= 1.0) {
+        const targetTile = ctx.tileElementAt(Math.floor(target.x), Math.floor(target.y));
+        const weakness = ELEMENT_WEAKNESS[e.element];
+        if (targetTile === weakness && distT < e.attackRange + 4) {
+          // 적이 내 약점 타일 위에 있으면 우회하여 접근
+          const safeTile = findNearestSafeTile(e, ctx, cfg);
+          if (safeTile && Math.sqrt((safeTile.x - target.x) ** 2 + (safeTile.y - target.y) ** 2) < e.attackRange + 2) {
+            ctx.moveToward(e, safeTile.x + 0.5, safeTile.y + 0.5);
+            return;
+          }
+        }
+      }
+
       ctx.moveToward(e, target.x, target.y);
 
       // 갭클로저: 돌진 스킬 선제 사용
@@ -507,8 +761,26 @@ function runMeleeAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captu
   } else if (ai.lockedGoal || goalPt) {
     const gx = ai.lockedGoal?.x ?? goalPt!.x;
     const gy = ai.lockedGoal?.y ?? goalPt!.y;
+    // 어려움: 이동 중 버프 타일 경유
+    if (cfg.seekBuffTile && e.elemBuff <= 0) {
+      const buffTile = findBuffTile(e, ctx, cfg);
+      if (buffTile) {
+        const goalDist = Math.sqrt((gx - e.x) ** 2 + (gy - e.y) ** 2);
+        const buffDist = Math.sqrt((buffTile.x - e.x) ** 2 + (buffTile.y - e.y) ** 2);
+        // 버프 타일이 목적지보다 가까우면 경유
+        if (buffDist < goalDist * 0.6) {
+          ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
+          return;
+        }
+      }
+    }
     ctx.moveToward(e, gx, gy);
   } else {
+    // 어려움: 비전투 시 버프 타일 탐색
+    if (cfg.seekBuffTile) {
+      const buffTile = findBuffTile(e, ctx, cfg);
+      if (buffTile) { ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5); return; }
+    }
     const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
     if (anyEnemy) ctx.moveToward(e, anyEnemy.x, anyEnemy.y);
     else { e.vx = 0; e.vy = 0; }
@@ -518,6 +790,7 @@ function runMeleeAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captu
 // ─── 탱커 AI: 거점 사수, 아군 보호, 적극 교전 ───
 
 function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: CapturePoint | null, nx: number, ny: number, ctx: AIWorldContext) {
+  const cfg = getAIDifficultyConfig();
   // 탱커는 거점을 우선 — 적이 있어도 거점 위에서 교전
   const onPoint = goalPt && Math.sqrt((e.x - goalPt.x) ** 2 + (e.y - goalPt.y) ** 2) <= goalPt.radius;
 
@@ -527,6 +800,18 @@ function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captur
     if (distT > e.attackRange) {
       // 거점 위에 있으면 거점에서 벗어나지 않음
       if (onPoint && distT > e.attackRange + 2) {
+        // 어려움: 거점 안에서도 유리한 타일 위치로 미세 조정
+        if (cfg.tileAwareness >= 1.0) {
+          const curTile = ctx.tileElementAt(Math.floor(e.x), Math.floor(e.y));
+          if (curTile !== e.element) {
+            const buffTile = findBuffTile(e, ctx, cfg);
+            if (buffTile && goalPt && Math.sqrt((buffTile.x - goalPt.x) ** 2 + (buffTile.y - goalPt.y) ** 2) <= goalPt.radius + 1) {
+              e.vx = (buffTile.x + 0.5 - e.x) * 0.3;
+              e.vy = (buffTile.y + 0.5 - e.y) * 0.3;
+              return;
+            }
+          }
+        }
         e.vx = nx * e.speed * 0.2;
         e.vy = ny * e.speed * 0.2;
       } else {
@@ -556,6 +841,11 @@ function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captur
     const gy = ai.lockedGoal?.y ?? goalPt!.y;
     ctx.moveToward(e, gx, gy);
   } else {
+    // 어려움: 비전투 시 버프 타일에서 대기
+    if (cfg.seekBuffTile) {
+      const buffTile = findBuffTile(e, ctx, cfg);
+      if (buffTile) { ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5); return; }
+    }
     const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
     if (anyEnemy) ctx.moveToward(e, anyEnemy.x, anyEnemy.y);
     else { e.vx = 0; e.vy = 0; }
@@ -565,6 +855,7 @@ function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captur
 // ─── 서포터 AI: 거점 근처에서 아군 지원 + 자기도 공격 ───
 
 function runSupportAI(e: Entity, ai: AIState, target: Entity | null, goalPt: CapturePoint | null, nx: number, ny: number, ctx: AIWorldContext) {
+  const cfg = getAIDifficultyConfig();
   // 가장 가까운 아군 딜러/탱커 찾기
   const allies = ctx.entities.filter(a => a.team === e.team && !a.dead && a.id !== e.id);
   const nearestAlly = allies.length > 0
@@ -588,9 +879,27 @@ function runSupportAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Cap
       if (distT > e.attackRange) {
         ctx.moveToward(e, target.x, target.y);
       } else if (distT < e.attackRange * 0.3) {
+        // 어려움: 후퇴 시 유리한 타일 방향으로
+        if (cfg.tileAwareness >= 1.0) {
+          const safeTile = findNearestSafeTile(e, ctx, cfg);
+          if (safeTile && Math.sqrt((safeTile.x - e.x) ** 2 + (safeTile.y - e.y) ** 2) < 4) {
+            ctx.moveToward(e, safeTile.x + 0.5, safeTile.y + 0.5);
+            return;
+          }
+        }
         ctx.moveAway(e, target.x, target.y, 0.6);
       } else {
-        // 적정 거리 유지하며 딜링
+        // 적정 거리 유지하며 딜링 — 어려움: 버프 타일 위에서 전투
+        if (cfg.tileAwareness >= 1.0) {
+          const curTile = ctx.tileElementAt(Math.floor(e.x), Math.floor(e.y));
+          if (curTile !== e.element) {
+            const buffTile = findBuffTile(e, ctx, cfg);
+            if (buffTile && Math.sqrt((buffTile.x - e.x) ** 2 + (buffTile.y - e.y) ** 2) < 3) {
+              ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
+              return;
+            }
+          }
+        }
         e.vx = nx * e.speed * 0.3;
         e.vy = ny * e.speed * 0.3;
       }
@@ -600,7 +909,14 @@ function runSupportAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Cap
       const gy = ai.lockedGoal?.y ?? goalPt!.y;
       ctx.moveToward(e, gx, gy);
     } else {
-      // 아군 주변 대기
+      // 어려움: 아군 주변 버프 타일에서 대기
+      if (cfg.seekBuffTile) {
+        const buffTile = findBuffTile(e, ctx, cfg);
+        if (buffTile && Math.sqrt((buffTile.x - nearestAlly.x) ** 2 + (buffTile.y - nearestAlly.y) ** 2) < followDist + 2) {
+          ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
+          return;
+        }
+      }
       e.vx = nx * e.speed * 0.3;
       e.vy = ny * e.speed * 0.3;
     }

@@ -197,7 +197,19 @@ export interface AIWorldContext {
   hazardZones: Array<{ x: number; y: number; radius: number; type: string }>;
   telegraphs: Array<{ x: number; y: number; radius: number; delay: number; owner: Entity; isHeal: boolean }>;
   burningTiles: Array<{ x: number; y: number }>;
+  /** 타일 좌표의 원소 속성 조회 (null=중립) */
+  tileElementAt: (x: number, y: number) => ElementType | null;
+  /** 필드 크기 */
+  fieldW: number;
+  fieldH: number;
   time: number;
+  // ─── 시야 시스템 ───
+  /** 좌표가 해당 팀의 현재 시야 안인지 (fog state=2) */
+  isInVision: (team: 'A' | 'B', x: number, y: number) => boolean;
+  /** 좌표가 해당 팀에게 탐험된 적 있는지 (fog state>=1) */
+  isExplored: (team: 'A' | 'B', x: number, y: number) => boolean;
+  /** 미탐험 타일 중 가장 가까운 것 찾기 */
+  findNearestUnexplored: (e: Entity) => { x: number; y: number } | null;
   hasLineOfSight: (x1: number, y1: number, x2: number, y2: number) => boolean;
   isWallAt: (x: number, y: number) => boolean;
   findPathBFS: (sx: number, sy: number, tx: number, ty: number) => [number, number][] | null;

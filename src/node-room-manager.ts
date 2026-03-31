@@ -80,15 +80,7 @@ export class NodeRoomManager {
         break;
       }
 
-      // 인증/잔고 관련은 중앙서버에서 처리 → 노드에서는 무시
-      case 'guest_login':
-      case 'register':
-      case 'login':
-      case 'upgrade_account':
-      case 'link_wallet':
-      case 'get_balance':
-        this.send(conn.ws, { type: 'error', msg: '이 요청은 중앙서버로 보내세요' } as any);
-        break;
+      // 알 수 없는 메시지는 무시
     }
   }
 

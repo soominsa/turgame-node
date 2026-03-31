@@ -9,6 +9,7 @@ import { createFieldGrid, tickField, setTileChangeCallback } from '../core/tick-
 import { createWood, createWater, createSoil } from '../core/materials.js';
 import { hexesInRange, hexDistance, worldToHex, hexNeighborsBounded } from '../core/hex.js';
 import { NavGrid } from './pathfinding.js';
+import { FogOfWar } from './fog-of-war.js';
 import { checkCombo, applyComboEffect, resetComboCooldowns } from './combo-system.js';
 import { ULTIMATES, ULT_CHARGE } from './ultimate-defs.js';
 import {
@@ -63,6 +64,9 @@ export class GameEngine {
   private baseSpeedMap = new Map<string, number>();
   // 길찾기/벽 체크는 NavGrid 클래스에 위임
   nav = new NavGrid();
+  // 팀별 전장의 안개 (AI용 — 렌더링용 FogOfWar와 별개로 각 팀의 시야 추적)
+  fogA: FogOfWar | null = null;
+  fogB: FogOfWar | null = null;
   // 디버그: 엔티티 위치 추적
   private prevPositions = new Map<string, { x: number; y: number }>();
   stuckCounters = new Map<string, number>();
@@ -135,6 +139,10 @@ export class GameEngine {
     this.nav = new NavGrid(this.config.pathAlgorithm, this.config.navScale);
     this.nav.build(this.state.walls, this.config.fieldW, this.config.fieldH);
 
+    // 팀별 전장의 안개 초기화 (AI 시야 추적용)
+    this.fogA = new FogOfWar(this.config.fieldW, this.config.fieldH, 6);
+    this.fogB = new FogOfWar(this.config.fieldW, this.config.fieldH, 6);
+
     if (this.callbacks.onTileChange) {
       setTileChangeCallback(this.callbacks.onTileChange);
     }
@@ -151,6 +159,15 @@ export class GameEngine {
 
     this.state.time += dt;
     this.state.tickAccum += dt;
+
+    // 팀별 전장의 안개 갱신 (엔티티 visionRange 반영)
+    if (this.fogA && this.fogB) {
+      const aliveA = this.state.entities.filter(e => e.team === 'A' && !e.dead);
+      const aliveB = this.state.entities.filter(e => e.team === 'B' && !e.dead);
+      // 각 엔티티의 visionRange 중 최대값을 팀 시야로 사용 (성능 상 한 번만 계산)
+      this.fogA.update(aliveA.map(e => ({ x: e.x, y: e.y })));
+      this.fogB.update(aliveB.map(e => ({ x: e.x, y: e.y })));
+    }
 
     this.updateRain(dt);
 
@@ -1143,6 +1160,9 @@ export class GameEngine {
       p.y += p.vy * dt;
       p.lifetime -= dt;
 
+      // 팀 시야 밖으로 나간 투사체는 소멸 (동료 시야 안이면 유지)
+      if (!this.isTeamVisible(p.owner.team, p.x, p.y)) { p.lifetime = 0; continue; }
+
       // 벽 충돌: Math.floor 기반 경로 샘플링 (엔티티 충돌과 동일 좌표계)
       const moveDist = Math.sqrt((p.x - prevPx) ** 2 + (p.y - prevPy) ** 2);
       const checkSteps = Math.max(2, Math.ceil(moveDist * 4));
@@ -1235,6 +1255,8 @@ export class GameEngine {
     if (target.dead || target.invincibleTimer > 0) return;
     if (e.skillCasting > 0 || e.skillRecovery > 0) return;
     const dist = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
+    // 팀 공유 시야 밖 적은 공격 불가 (동료가 밝혔으면 OK)
+    if (!this.isTeamVisible(e.team, target.x, target.y)) return;
     if (!this.nav.hasLineOfSight(e.x, e.y, target.x, target.y)) return;
     if (dist <= e.attackRange && e.attackCooldown <= 0) {
       e.attackCooldown = 1 / e.attackSpeed;
@@ -1270,8 +1292,10 @@ export class GameEngine {
   autoUseSkills(e: Entity, target: Entity) {
     if (target.dead) return;
     if (e.skillCasting > 0 || e.skillRecovery > 0) return;
-    if (!this.nav.hasLineOfSight(e.x, e.y, target.x, target.y)) return;
     const dist = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
+    // 팀 공유 시야 밖 적은 스킬 사용 불가
+    if (!this.isTeamVisible(e.team, target.x, target.y)) return;
+    if (!this.nav.hasLineOfSight(e.x, e.y, target.x, target.y)) return;
     for (const s of e.skills) {
       if (s.remaining <= 0 && dist <= s.range && s.type !== 'heal') {
         this.executeSkill(e, s, target);
@@ -1281,7 +1305,14 @@ export class GameEngine {
   }
 
   executeSkill(user: Entity, skill: Skill, target: Entity) {
-    if (skill.type !== 'heal' && !this.nav.hasLineOfSight(user.x, user.y, target.x, target.y)) return;
+    if (skill.type !== 'heal' && skill.type !== 'buff') {
+      // 적 대상 스킬: 팀 공유 시야 + LOS 체크
+      if (!this.isTeamVisible(user.team, target.x, target.y)) return;
+      if (!this.nav.hasLineOfSight(user.x, user.y, target.x, target.y)) return;
+    } else {
+      // 힐/버프: 아군이므로 팀 시야 안이면 OK (벽 관통 가능)
+      if (!this.isTeamVisible(user.team, target.x, target.y)) return;
+    }
     // 선딜/후딜 중에는 스킬 사용 불가
     if (user.skillCasting > 0 || user.skillRecovery > 0) return;
     skill.remaining = skill.cooldown;
@@ -1512,11 +1543,17 @@ export class GameEngine {
   }
 
   findNearestEnemy(e: Entity): Entity | null {
-    return this.nav.findNearestEnemy(e, this.state.entities);
+    const visCheck = (this.fogA && this.fogB)
+      ? (team: 'A' | 'B', x: number, y: number) => this.isTeamVisible(team, x, y)
+      : undefined;
+    return this.nav.findNearestEnemy(e, this.state.entities, visCheck);
   }
 
   findNearestEnemyIgnoreWalls(e: Entity): Entity | null {
-    return this.nav.findNearestEnemyIgnoreWalls(e, this.state.entities);
+    const visCheck = (this.fogA && this.fogB)
+      ? (team: 'A' | 'B', x: number, y: number) => this.isTeamVisible(team, x, y)
+      : undefined;
+    return this.nav.findNearestEnemyIgnoreWalls(e, this.state.entities, visCheck);
   }
 
   // ─── 자원 지형 스킬 강화 ───
@@ -1537,6 +1574,49 @@ export class GameEngine {
   }
 
   // ─── 불타는 타일 수집 (AI 회피용) ───
+
+  /** 대상 좌표가 해당 팀의 공유 시야(fog visible=2) 안인지 체크 */
+  isTeamVisible(team: 'A' | 'B', wx: number, wy: number): boolean {
+    const fog = team === 'A' ? this.fogA : this.fogB;
+    if (!fog) return true; // fog 없으면 전부 가시 (시뮬레이터 등)
+    return fog.isVisible(wx, wy);
+  }
+
+  /** 미탐험 타일 중 가장 가까운 것 찾기 (AI 탐험 목적) */
+  private findNearestUnexplored(e: Entity): { x: number; y: number } | null {
+    const fog = e.team === 'A' ? this.fogA : this.fogB;
+    if (!fog) return null;
+
+    const ex = Math.floor(e.x), ey = Math.floor(e.y);
+    const maxRange = 15; // 너무 먼 곳은 탐색 X
+    let bestDist = Infinity;
+    let best: { x: number; y: number } | null = null;
+
+    // 나선형 탐색 (가까운 곳부터)
+    for (let r = 2; r <= maxRange; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; // 외곽만
+          const tx = ex + dx, ty = ey + dy;
+          if (tx < 0 || ty < 0 || tx >= this.config.fieldW || ty >= this.config.fieldH) continue;
+          if (this.nav.isWallAt(tx, ty)) continue;
+          if (fog.getState(tx, ty) !== 0) continue; // 이미 탐험됨
+          const d = dx * dx + dy * dy;
+          if (d < bestDist) { bestDist = d; best = { x: tx, y: ty }; }
+        }
+      }
+      if (best) return best; // 현재 반경에서 찾으면 바로 반환
+    }
+    return best;
+  }
+
+  /** 타일 좌표의 원소 속성 반환 (AI용) */
+  private getTileElementAt(x: number, y: number): import('./game-engine-types.js').ElementType | null {
+    if (x < 0 || y < 0 || x >= this.config.fieldW || y >= this.config.fieldH) return null;
+    const mat = this.state.field[y][x].material;
+    if (!mat) return null;
+    return getTileElement(mat.type, mat.thermalState);
+  }
 
   private collectBurningTiles(): Array<{ x: number; y: number }> {
     const tiles: Array<{ x: number; y: number }> = [];
@@ -1570,7 +1650,19 @@ export class GameEngine {
         x: t.x, y: t.y, radius: t.radius, delay: t.delay, owner: t.owner, isHeal: t.isHeal,
       })),
       burningTiles: this.collectBurningTiles(),
+      tileElementAt: (x, y) => this.getTileElementAt(x, y),
+      fieldW: this.config.fieldW,
+      fieldH: this.config.fieldH,
       time: this.state.time,
+      isInVision: (team, x, y) => {
+        const fog = team === 'A' ? this.fogA : this.fogB;
+        return fog ? fog.isVisible(x, y) : true; // fog 없으면 전부 가시
+      },
+      isExplored: (team, x, y) => {
+        const fog = team === 'A' ? this.fogA : this.fogB;
+        return fog ? fog.isExplored(x, y) : true;
+      },
+      findNearestUnexplored: (e) => this.findNearestUnexplored(e),
       hasLineOfSight: (x1, y1, x2, y2) => this.nav.hasLineOfSight(x1, y1, x2, y2),
       isWallAt: (x, y) => this.nav.isWallAt(x, y),
       findPathBFS: (sx, sy, tx, ty) => this.findPathBFS(sx, sy, tx, ty),
