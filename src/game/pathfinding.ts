@@ -18,6 +18,7 @@ export class NavGrid {
   private wallWorldCache: Array<{ x: number; y: number }> = [];
   private pathCache = new Map<string, { path: [number, number][]; time: number }>();
   private committedPaths = new Map<string, { target: string; path: [number, number][]; time: number }>();
+  private waypointIndices = new Map<string, number>(); // 엔티티별 현재 웨이포인트 인덱스 (진동 방지)
   private pathAlgorithm: PathAlgorithm;
 
   // 재사용 버퍼 (BFS/A* 호출마다 new 방지)
@@ -218,44 +219,83 @@ export class NavGrid {
     const d = Math.sqrt(dx * dx + dy * dy);
     if (d < 0.3) { e.vx = 0; e.vy = 0; return; }
 
-    const targetKey = `${Math.floor(tx)},${Math.floor(ty)}`;
+    // committed path: 키를 2배 해상도로 만들어 작은 이동에 의한 캐시 미스 방지
+    const targetKey = `${Math.floor(tx * 2)},${Math.floor(ty * 2)}`;
     const committed = this.committedPaths.get(e.id);
     let path: [number, number][] | null = null;
+    let pathChanged = false;
     if (committed && committed.target === targetKey && time - committed.time < 5) {
       path = committed.path;
     } else {
       path = this.findPathBFS(e.x, e.y, tx, ty, time);
       if (path && path.length > 0) {
         this.committedPaths.set(e.id, { target: targetKey, path, time });
+        pathChanged = true;
       }
     }
 
     if (path && path.length > 0) {
-      let wpIdx = 0;
-      let bestDist = Infinity;
-      for (let i = 0; i < path.length; i++) {
-        const [wx, wy] = path[i];
-        const wd = (wx - e.x) ** 2 + (wy - e.y) ** 2;
-        if (wd < bestDist) { bestDist = wd; wpIdx = i; }
+      // 웨이포인트 인덱스 추적 (진동 방지: 앞으로만 진행)
+      let prevWpIdx = this.waypointIndices.get(e.id) || 0;
+      if (pathChanged) prevWpIdx = 0; // 경로가 바뀌면 리셋
+
+      // 현재 인덱스가 범위 초과 시 클램프
+      if (prevWpIdx >= path.length) prevWpIdx = path.length - 1;
+
+      // 현재 웨이포인트에 충분히 가까우면 다음으로 전진
+      const [cwx, cwy] = path[prevWpIdx];
+      const cwDist = (cwx - e.x) ** 2 + (cwy - e.y) ** 2;
+      let wpIdx = prevWpIdx;
+      if (cwDist < 0.5 * 0.5 && wpIdx < path.length - 1) {
+        wpIdx++; // 다음 웨이포인트로 전진
       }
-      if (wpIdx < path.length - 1 && bestDist < 0.3) wpIdx++;
-      const [wpx, wpy] = path[Math.min(wpIdx, path.length - 1)];
+
+      // 혹시 더 앞 웨이포인트가 가까우면 스킵 (직선 경로 최적화, 뒤로는 안 감)
+      for (let i = wpIdx + 1; i < Math.min(wpIdx + 3, path.length); i++) {
+        const [fx, fy] = path[i];
+        const fd = (fx - e.x) ** 2 + (fy - e.y) ** 2;
+        if (fd < cwDist && this.hasLineOfSight(e.x, e.y, fx, fy)) {
+          wpIdx = i;
+        }
+      }
+
+      this.waypointIndices.set(e.id, wpIdx);
+
+      const [wpx, wpy] = path[wpIdx];
       const wpDx = wpx - e.x, wpDy = wpy - e.y;
       const wpD = Math.sqrt(wpDx * wpDx + wpDy * wpDy);
-      if (wpD > 0.1) { e.vx = (wpDx / wpD) * e.speed; e.vy = (wpDy / wpD) * e.speed; }
+      if (wpD > 0.05) { e.vx = (wpDx / wpD) * e.speed; e.vy = (wpDy / wpD) * e.speed; }
     } else {
-      // BFS 실패 시 축별 우회 시도
+      // BFS 실패 시 축별 우회 시도 (벽 슬라이딩)
       const vx = (dx / d) * e.speed;
       const vy = (dy / d) * e.speed;
-      if (!this.isWallAtWorld(e.x + vx * 0.15, e.y)) {
+      // 대각선 먼저 시도
+      if (!this.isWallAtWorld(e.x + vx * 0.2, e.y + vy * 0.2)) {
+        e.vx = vx; e.vy = vy;
+      } else if (!this.isWallAtWorld(e.x + vx * 0.2, e.y)) {
         e.vx = vx; e.vy = 0;
-      } else if (!this.isWallAtWorld(e.x, e.y + vy * 0.15)) {
+      } else if (!this.isWallAtWorld(e.x, e.y + vy * 0.2)) {
         e.vx = 0; e.vy = vy;
       } else {
-        e.vx = (Math.random() > 0.5 ? 1 : -1) * e.speed * 0.5;
-        e.vy = (Math.random() > 0.5 ? 1 : -1) * e.speed * 0.5;
+        // 벽에 완전 막힘 → 수직 방향 벽 슬라이딩 (랜덤 대신 결정론적)
+        const perpX = -dy / d, perpY = dx / d;
+        if (!this.isWallAtWorld(e.x + perpX * 0.3, e.y + perpY * 0.3)) {
+          e.vx = perpX * e.speed * 0.7;
+          e.vy = perpY * e.speed * 0.7;
+        } else if (!this.isWallAtWorld(e.x - perpX * 0.3, e.y - perpY * 0.3)) {
+          e.vx = -perpX * e.speed * 0.7;
+          e.vy = -perpY * e.speed * 0.7;
+        } else {
+          e.vx = 0; e.vy = 0; // 완전히 막힘 → 정지 (도리도리보다 나음)
+        }
       }
     }
+  }
+
+  /** stuckCounter가 높으면 committed path 초기화 (game-engine에서 호출) */
+  resetPath(entityId: string) {
+    this.committedPaths.delete(entityId);
+    this.waypointIndices.delete(entityId);
   }
 
   moveAway(e: Entity, tx: number, ty: number, factor: number) {
@@ -271,7 +311,12 @@ export class NavGrid {
       const tryDown = !this.isWallAtWorld(e.x, e.y + 1);
       if (tryUp && !tryDown) vy = -e.speed * factor;
       else if (tryDown && !tryUp) vy = e.speed * factor;
-      else vy = (Math.random() > 0.5 ? 1 : -1) * e.speed * factor;
+      else {
+        // 둘 다 열려있으면 적에서 더 먼 방향 선택 (랜덤 제거)
+        const distUp = (tx - e.x) ** 2 + (ty - (e.y - 1)) ** 2;
+        const distDown = (tx - e.x) ** 2 + (ty - (e.y + 1)) ** 2;
+        vy = (distUp >= distDown ? -1 : 1) * e.speed * factor;
+      }
     }
     if (this.isWallAtWorld(e.x, e.y + vy * 0.3)) {
       vy = 0;
@@ -279,7 +324,12 @@ export class NavGrid {
       const tryRight = !this.isWallAtWorld(e.x + 1, e.y);
       if (tryLeft && !tryRight) vx = -e.speed * factor;
       else if (tryRight && !tryLeft) vx = e.speed * factor;
-      else vx = (Math.random() > 0.5 ? 1 : -1) * e.speed * factor;
+      else {
+        // 둘 다 열려있으면 적에서 더 먼 방향 선택 (랜덤 제거)
+        const distLeft = (tx - (e.x - 1)) ** 2 + (ty - e.y) ** 2;
+        const distRight = (tx - (e.x + 1)) ** 2 + (ty - e.y) ** 2;
+        vx = (distLeft >= distRight ? -1 : 1) * e.speed * factor;
+      }
     }
     e.vx = vx; e.vy = vy;
   }

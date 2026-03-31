@@ -268,12 +268,44 @@ export class GameEngine {
         );
         // 5초간 3유닛 미만 이동 + 거점 위 아님 = 도리도리
         if (accum < 3 && !onPoint) {
-          this.stuckCounters.set(e.id, (this.stuckCounters.get(e.id) || 0) + 300);
+          const prevStuck = this.stuckCounters.get(e.id) || 0;
+          const newStuck = prevStuck + 300;
+          this.stuckCounters.set(e.id, newStuck);
           let nearWalls = '';
           for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
             if (this.nav.isWallAt(Math.floor(e.x) + dx, Math.floor(e.y) + dy)) nearWalls += `(${Math.floor(e.x)+dx},${Math.floor(e.y)+dy})`;
           }
-          if (!this.config.silent) console.log(`[DODORI] ${e.name}(${e.team}) pos=(${e.x.toFixed(1)},${e.y.toFixed(1)}) moved=${accum.toFixed(1)}u/5s walls=${nearWalls||'none'} v=(${e.vx.toFixed(1)},${e.vy.toFixed(1)})`);
+          if (!this.config.silent) console.log(`[DODORI] ${e.name}(${e.team}) pos=(${e.x.toFixed(1)},${e.y.toFixed(1)}) moved=${accum.toFixed(1)}u/5s walls=${nearWalls||'none'} v=(${e.vx.toFixed(1)},${e.vy.toFixed(1)}) stuck=${newStuck}`);
+
+          // ── 교정 조치: committed path 리셋 + 넛지 ──
+          this.nav.resetPath(e.id);
+
+          // 2회 연속 도리도리 (10초) → 가장 가까운 빈 공간 방향으로 넛지
+          if (newStuck >= 600) {
+            this.nav.escapeWall(e); // 벽 안이면 탈출
+            // 벽 옆이면 벽에서 멀어지는 방향으로 밀기
+            const nudgeDist = 0.8;
+            let bestDir: { dx: number; dy: number } | null = null;
+            let bestOpen = 0;
+            for (const [ndx, ndy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,1],[1,-1],[-1,-1]]) {
+              const testX = e.x + ndx * nudgeDist;
+              const testY = e.y + ndy * nudgeDist;
+              if (!this.nav.isWallAtHex(testX, testY) && !this.nav.collidesWithWall(testX, testY, 0.25)) {
+                // 해당 방향의 열린 공간 점수 (더 넓은 곳 선호)
+                let openScore = 0;
+                for (let r = 1; r <= 3; r++) {
+                  if (!this.nav.isWallAtHex(e.x + ndx * r * 0.5, e.y + ndy * r * 0.5)) openScore++;
+                }
+                if (openScore > bestOpen) { bestOpen = openScore; bestDir = { dx: ndx, dy: ndy }; }
+              }
+            }
+            if (bestDir) {
+              e.x += bestDir.dx * nudgeDist;
+              e.y += bestDir.dy * nudgeDist;
+              if (!this.config.silent) console.log(`[DODORI-FIX] ${e.name} nudged to (${e.x.toFixed(1)},${e.y.toFixed(1)})`);
+            }
+            this.stuckCounters.set(e.id, 0); // 교정 후 리셋
+          }
         } else {
           this.stuckCounters.set(e.id, 0);
         }
