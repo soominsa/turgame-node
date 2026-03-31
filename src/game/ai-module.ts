@@ -306,11 +306,23 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
         ai.lockedGoal = { x: ai.exploreTarget.x + 0.5, y: ai.exploreTarget.y + 0.5, until: ctx.time + 6 };
       }
     }
-    // 4) 그 외: 적 방향으로 이동 (시야 밖이어도 대략적 방향)
+    // 4) 그 외: 적 방향으로 이동 — 팀 시야 내 적 우선, 없으면 벽 무시 탐색
     else {
-      const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
-      if (anyEnemy) {
-        ai.lockedGoal = { x: anyEnemy.x, y: anyEnemy.y, until: ctx.time + 3 };
+      // 팀 시야에 보이는 적 우선 추적 (동료가 밝힌 적)
+      const teamVisibleEnemy = ctx.entities
+        .filter(t => t.team !== e.team && !t.dead && ctx.isInVision(e.team, t.x, t.y))
+        .sort((a, b) => {
+          const da = (a.x - e.x) ** 2 + (a.y - e.y) ** 2;
+          const db = (b.x - e.x) ** 2 + (b.y - e.y) ** 2;
+          return da - db;
+        })[0];
+      if (teamVisibleEnemy) {
+        ai.lockedGoal = { x: teamVisibleEnemy.x, y: teamVisibleEnemy.y, until: ctx.time + 5 };
+      } else {
+        const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
+        if (anyEnemy) {
+          ai.lockedGoal = { x: anyEnemy.x, y: anyEnemy.y, until: ctx.time + 5 };
+        }
       }
     }
   }
@@ -456,14 +468,26 @@ function pickCapturePoint(e: Entity, strategy: AIStrategy, ctx: AIWorldContext):
   const unowned = known.filter(p => p.owner !== e.team);
   if (unowned.length === 0) {
     if (known.length === 0) return null; // 아직 거점 미발견
-    // 모든 거점이 우리 팀 → 적이 빼앗을 수 있는 거점 방어 또는 중앙 순찰
-    const byDist = known.sort((a, b) => {
-      const da = (a.x - e.x) ** 2 + (a.y - e.y) ** 2;
-      const db = (b.x - e.x) ** 2 + (b.y - e.y) ** 2;
-      return da - db;
-    });
-    // 가장 가까운 거점이 아닌 다른 거점으로 이동 (순찰)
-    return byDist.length > 1 ? byDist[1] : byDist[0] || null;
+    // 모든 거점이 우리 팀 → 적이 위협하는 거점 방어, 없으면 null (적 탐색으로 전환)
+    const enemies = ctx.entities.filter(t => t.team !== e.team && !t.dead);
+    // 적이 가장 가까운 거점 = 위협받는 거점
+    let threatened: CapturePoint | null = null;
+    let threatDist = Infinity;
+    for (const pt of known) {
+      for (const en of enemies) {
+        const d = Math.sqrt((en.x - pt.x) ** 2 + (en.y - pt.y) ** 2);
+        if (d < threatDist) {
+          threatDist = d;
+          threatened = pt;
+        }
+      }
+    }
+    // 적이 거점 근처(반경+8)에 있으면 해당 거점 방어
+    if (threatened && threatDist < threatened.radius + 8) {
+      return threatened;
+    }
+    // 위협 없음 → null 반환 → AI가 적을 찾으러 감
+    return null;
   }
 
   switch (strategy) {
