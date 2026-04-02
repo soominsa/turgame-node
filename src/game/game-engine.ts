@@ -264,7 +264,7 @@ export class GameEngine {
         if (e.dead || this.playerControlledIds.has(e.id) || e.id === this.playerControlledId) continue;
         const accum = this.moveAccum.get(e.id) || 0;
         const onPoint = this.state.points.some(pt =>
-          Math.sqrt((e.x - pt.x) ** 2 + (e.y - pt.y) ** 2) <= pt.radius
+          Math.sqrt((e.x - pt.x) ** 2 + (e.y - pt.y) ** 2) <= pt.radius + 0.5
         );
         // 5초간 3유닛 미만 이동 + 거점 위 아님 = 도리도리
         if (accum < 3 && !onPoint) {

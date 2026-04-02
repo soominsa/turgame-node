@@ -219,35 +219,55 @@ export class NavGrid {
     const d = Math.sqrt(dx * dx + dy * dy);
     if (d < 0.3) { e.vx = 0; e.vy = 0; return; }
 
-    // committed path: 키를 2배 해상도로 만들어 작은 이동에 의한 캐시 미스 방지
-    const targetKey = `${Math.floor(tx * 2)},${Math.floor(ty * 2)}`;
+    // committed path: 타겟이 일정 거리(0.5u) 이상 움직였을 때만 재계산하여 진동 방지
     const committed = this.committedPaths.get(e.id);
     let path: [number, number][] | null = null;
     let pathChanged = false;
-    if (committed && committed.target === targetKey && time - committed.time < 5) {
-      path = committed.path;
-    } else {
+
+    if (committed && time - committed.time < 5) {
+      // 기존 타겟과 새 타겟 사이의 거리 체크
+      const [oldTx, oldTy] = committed.target.split(',').map(Number);
+      const tDistSq = (tx - oldTx) ** 2 + (ty - oldTy) ** 2;
+      if (tDistSq < 0.5 * 0.5) {
+        path = committed.path;
+      }
+    }
+
+    if (!path) {
       path = this.findPathBFS(e.x, e.y, tx, ty, time);
       if (path && path.length > 0) {
-        this.committedPaths.set(e.id, { target: targetKey, path, time });
+        this.committedPaths.set(e.id, { target: `${tx},${ty}`, path, time });
         pathChanged = true;
       }
     }
 
     if (path && path.length > 0) {
       // 웨이포인트 인덱스 추적 (진동 방지: 앞으로만 진행)
-      let prevWpIdx = this.waypointIndices.get(e.id) || 0;
-      if (pathChanged) prevWpIdx = 0; // 경로가 바뀌면 리셋
+      let wpIdx = this.waypointIndices.get(e.id) || 0;
+
+      if (pathChanged) {
+        // 경로가 바뀌었을 때, 현재 위치에서 가장 가까운 웨이포인트를 찾아서 시작 (뒤로 튀기 방지)
+        let minDistSq = Infinity;
+        let bestIdx = 0;
+        for (let i = 0; i < Math.min(path.length, 5); i++) {
+          const [px, py] = path[i];
+          const dSq = (px - e.x) ** 2 + (py - e.y) ** 2;
+          if (dSq < minDistSq) {
+            minDistSq = dSq;
+            bestIdx = i;
+          }
+        }
+        wpIdx = bestIdx;
+      }
 
       // 현재 인덱스가 범위 초과 시 클램프
-      if (prevWpIdx >= path.length) prevWpIdx = path.length - 1;
+      if (wpIdx >= path.length) wpIdx = path.length - 1;
 
-      // 현재 웨이포인트에 충분히 가까우면 다음으로 전진
-      const [cwx, cwy] = path[prevWpIdx];
-      const cwDist = (cwx - e.x) ** 2 + (cwy - e.y) ** 2;
-      let wpIdx = prevWpIdx;
-      if (cwDist < 0.5 * 0.5 && wpIdx < path.length - 1) {
-        wpIdx++; // 다음 웨이포인트로 전진
+      // 현재 웨이포인트에 충분히 가까우면 다음으로 전진 (threshold 완화: 0.5 -> 0.4)
+      const [cwx, cwy] = path[wpIdx];
+      const cwDistSq = (cwx - e.x) ** 2 + (cwy - e.y) ** 2;
+      if (cwDistSq < 0.4 * 0.4 && wpIdx < path.length - 1) {
+        wpIdx++;
       }
 
       // 혹시 더 앞 웨이포인트가 가까우면 스킵 (직선 경로 최적화, 뒤로는 안 감)

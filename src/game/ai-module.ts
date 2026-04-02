@@ -65,6 +65,7 @@ export interface AIState {
   wanderAngle: number;
   lockedGoal: { x: number; y: number; until: number } | null;
   lastHp: number; // 타격 감지용
+  lastTargetId: string | null; // 타겟 히스테리시스용
   // 시야 기반 탐험 상태
   exploreTarget: { x: number; y: number } | null;  // 현재 탐험 목표
   knownPointCount: number;   // 발견한 거점 수
@@ -90,6 +91,7 @@ function getAIState(e: Entity): AIState {
       wanderAngle: Math.random() * Math.PI * 2,
       lockedGoal: null,
       lastHp: 0,
+      lastTargetId: null,
       exploreTarget: null,
       knownPointCount: 0,
       knownEnemyCount: 0,
@@ -375,6 +377,9 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
   if (target && !target.dead) {
     ctx.autoAttack(e, target);
     if (Math.random() < cfg.skillUseChance) ctx.autoUseSkills(e, target);
+    ai.lastTargetId = target.id;
+  } else {
+    ai.lastTargetId = null;
   }
 }
 
@@ -382,6 +387,8 @@ export function runAI(e: Entity, ctx: AIWorldContext) {
 
 function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entity | null {
   const cfg = getAIDifficultyConfig();
+  const ai = getAIState(e);
+
   const visible = ctx.entities.filter(t => {
     if (t.team === e.team || t.dead) return false;
     // 팀 공유 시야 밖 무시 (보통/어려움) — 동료가 밝혔으면 타겟 가능
@@ -422,6 +429,9 @@ function pickTarget(e: Entity, strategy: AIStrategy, ctx: AIWorldContext): Entit
 
     // 기본: 가까운 적 선호
     score += (20 - dist) * 2;
+
+    // 타겟 히스테리시스: 현재 타겟에게 보너스 (+15)
+    if (t.id === ai.lastTargetId) score += 15;
 
     // 협공 보너스: 아군이 이미 공격 중인 적 +30
     const allyCount = allyTargets.get(t.id) || 0;
@@ -662,16 +672,21 @@ function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Capt
   const cfg = getAIDifficultyConfig();
   const terrain = findBeneficialTerrain(e, ctx);
 
+  // 히스테리시스 적용
+  const distToPoint = goalPt ? Math.sqrt((e.x - goalPt.x) ** 2 + (e.y - goalPt.y) ** 2) : 999;
+  const onPoint = goalPt && distToPoint <= goalPt.radius + 0.5;
+
   if (target && !target.dead) {
     const distT = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
-    const keepDist = e.attackRange * (cfg.kitingPrecisionMin + Math.random() * (cfg.kitingPrecisionMax - cfg.kitingPrecisionMin));
+    // keepDist에 히스테리시스 적용 (매 틱 랜덤이 아닌 고정값 사용 권장하지만 일단 랜덤 범위 좁힘)
+    const kitingFactor = (cfg.kitingPrecisionMin + cfg.kitingPrecisionMax) * 0.5;
+    const keepDist = e.attackRange * kitingFactor;
 
-    if (distT < keepDist) {
-      // 너무 가까우면 후퇴 — 어려움: 유리한 타일 방향으로 후퇴 시도
+    if (distT < keepDist - 0.5) {
+      // 너무 가까우면 후퇴
       if (cfg.tileAwareness >= 1.0) {
         const safeTile = findNearestSafeTile(e, ctx, cfg);
         if (safeTile) {
-          // 적 반대쪽이면서 안전한 타일 방향으로 후퇴
           const safeAngle = Math.atan2(safeTile.y + 0.5 - e.y, safeTile.x + 0.5 - e.x);
           const awayAngle = Math.atan2(e.y - target.y, e.x - target.x);
           const angleDiff = Math.abs(safeAngle - awayAngle);
@@ -681,15 +696,13 @@ function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Capt
           }
         }
       }
-      if (goalPt) {
-        const ptDist = Math.sqrt((goalPt.x - e.x) ** 2 + (goalPt.y - e.y) ** 2);
-        if (ptDist < goalPt.radius + 3) {
-          ctx.moveAway(e, target.x, target.y, 0.8);
-          return;
-        }
+      if (onPoint) {
+        // 거점 위라면 최대한 거점 안에서 후퇴
+        ctx.moveAway(e, target.x, target.y, 0.6);
+      } else {
+        ctx.moveAway(e, target.x, target.y, 1);
       }
-      ctx.moveAway(e, target.x, target.y, 1);
-    } else if (distT > e.attackRange) {
+    } else if (distT > e.attackRange + 0.3) {
       ctx.moveToward(e, target.x, target.y);
     } else {
       // 적정 거리 — 어려움: 유리한 타일 위에서 전투 유지
@@ -703,7 +716,15 @@ function runRangedAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Capt
           }
         }
       }
-      ctx.moveAway(e, target.x, target.y, 0.15);
+      // 배회 시 거점 중앙 방향 가중치
+      if (onPoint) {
+        const toCenterDirX = (goalPt!.x - e.x) / (distToPoint + 0.1);
+        const toCenterDirY = (goalPt!.y - e.y) / (distToPoint + 0.1);
+        e.vx = (toCenterDirX * 0.3 + nx) * e.speed * 0.2;
+        e.vy = (toCenterDirY * 0.3 + ny) * e.speed * 0.2;
+      } else {
+        ctx.moveAway(e, target.x, target.y, 0.15);
+      }
     }
   } else if (ai.lockedGoal || goalPt) {
     const gx = ai.lockedGoal?.x ?? goalPt!.x;
@@ -816,7 +837,9 @@ function runMeleeAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captu
 function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: CapturePoint | null, nx: number, ny: number, ctx: AIWorldContext) {
   const cfg = getAIDifficultyConfig();
   // 탱커는 거점을 우선 — 적이 있어도 거점 위에서 교전
-  const onPoint = goalPt && Math.sqrt((e.x - goalPt.x) ** 2 + (e.y - goalPt.y) ** 2) <= goalPt.radius;
+  // 히스테리시스 적용: 0.5유닛 여유
+  const distToPoint = goalPt ? Math.sqrt((e.x - goalPt.x) ** 2 + (e.y - goalPt.y) ** 2) : 999;
+  const onPoint = goalPt && distToPoint <= goalPt.radius + 0.5;
 
   if (target && !target.dead) {
     const distT = Math.sqrt((target.x - e.x) ** 2 + (target.y - e.y) ** 2);
@@ -824,20 +847,22 @@ function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captur
     if (distT > e.attackRange) {
       // 거점 위에 있으면 거점에서 벗어나지 않음
       if (onPoint && distT > e.attackRange + 2) {
-        // 어려움: 거점 안에서도 유리한 타일 위치로 미세 조정
+        // 거점 안에서도 유리한 타일 위치로 미세 조정
         if (cfg.tileAwareness >= 1.0) {
           const curTile = ctx.tileElementAt(Math.floor(e.x), Math.floor(e.y));
           if (curTile !== e.element) {
             const buffTile = findBuffTile(e, ctx, cfg);
             if (buffTile && goalPt && Math.sqrt((buffTile.x - goalPt.x) ** 2 + (buffTile.y - goalPt.y) ** 2) <= goalPt.radius + 1) {
-              e.vx = (buffTile.x + 0.5 - e.x) * 0.3;
-              e.vy = (buffTile.y + 0.5 - e.y) * 0.3;
+              ctx.moveToward(e, buffTile.x + 0.5, buffTile.y + 0.5);
               return;
             }
           }
         }
-        e.vx = nx * e.speed * 0.2;
-        e.vy = ny * e.speed * 0.2;
+        // 그냥 배회하는 대신, 거점 중앙 방향으로 살짝 이동 (중심 유지)
+        const toCenterDirX = (goalPt!.x - e.x) / (distToPoint + 0.1);
+        const toCenterDirY = (goalPt!.y - e.y) / (distToPoint + 0.1);
+        e.vx = (toCenterDirX * 0.4 + nx) * e.speed * 0.3;
+        e.vy = (toCenterDirY * 0.4 + ny) * e.speed * 0.3;
       } else {
         ctx.moveToward(e, target.x, target.y);
         // 갭클로저
@@ -872,7 +897,11 @@ function runTankAI(e: Entity, ai: AIState, target: Entity | null, goalPt: Captur
     }
     const anyEnemy = ctx.findNearestEnemyIgnoreWalls(e);
     if (anyEnemy) ctx.moveToward(e, anyEnemy.x, anyEnemy.y);
-    else { e.vx = 0; e.vy = 0; }
+    else {
+      // 제자리에서 배회 (노이즈)
+      e.vx = nx * e.speed * 0.2;
+      e.vy = ny * e.speed * 0.2;
+    }
   }
 }
 
