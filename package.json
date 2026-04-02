@@ -4,8 +4,9 @@
   "description": "Elemental Clash 게임노드 — 서버 운영자용",
   "type": "module",
   "scripts": {
-    "start": "npx tsx src/index.ts",
-    "typecheck": "npx tsc --noEmit"
+    "start": "npx tsx --type-check src/index.ts",
+    "typecheck": "npx tsc --noEmit",
+    "build": "npm run typecheck && npx tsc"
   },
   "dependencies": {
     "nat-upnp": "^1.1.1",

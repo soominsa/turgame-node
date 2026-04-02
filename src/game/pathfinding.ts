@@ -271,10 +271,11 @@ export class NavGrid {
       }
 
       // 혹시 더 앞 웨이포인트가 가까우면 스킵 (직선 경로 최적화, 뒤로는 안 감)
+      const currentDistSq = (path[wpIdx][0] - e.x) ** 2 + (path[wpIdx][1] - e.y) ** 2;
       for (let i = wpIdx + 1; i < Math.min(wpIdx + 3, path.length); i++) {
         const [fx, fy] = path[i];
         const fd = (fx - e.x) ** 2 + (fy - e.y) ** 2;
-        if (fd < cwDist && this.hasLineOfSight(e.x, e.y, fx, fy)) {
+        if (fd < currentDistSq && this.hasLineOfSight(e.x, e.y, fx, fy)) {
           wpIdx = i;
         }
       }
