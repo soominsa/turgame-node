@@ -119,7 +119,9 @@ export type GameEvent =
   | { ev: 'capture'; x: number; y: number; team: string }
   | { ev: 'rain_start'; intensity: number; coverLeft: number; coverRight: number }
   | { ev: 'rain_stop' }
-  | { ev: 'respawn'; entityId: string };
+  | { ev: 'respawn'; entityId: string }
+  | { ev: 'ultimate'; userId: string; userName: string; userTeam: 'A' | 'B'; ultName: string; icon: string; color: string; screenColor: string; x: number; y: number }
+  | { ev: 'combo'; name: string; icon: string; x: number; y: number; radius: number; isHeal: boolean };
 
 // 직렬화된 필드 셀
 export interface SerializedCell {

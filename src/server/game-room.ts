@@ -629,6 +629,18 @@ export class GameRoom {
       onCapture: (point: CapturePoint, team: string) => {
         this.eventBuffer.push({ ev: 'capture', x: point.x, y: point.y, team });
       },
+      onUltimate: (user: Entity, ultName: string, icon: string, color: string, screenColor: string) => {
+        this.eventBuffer.push({
+          ev: 'ultimate', userId: user.id, userName: user.name, userTeam: user.team,
+          ultName, icon, color, screenColor,
+          x: round2(user.x), y: round2(user.y),
+        });
+      },
+      onCombo: (name: string, icon: string, cx: number, cy: number, radius: number, isHeal: boolean) => {
+        this.eventBuffer.push({
+          ev: 'combo', name, icon, x: round2(cx), y: round2(cy), radius, isHeal,
+        });
+      },
       onRainStart: (intensity: number, coverLeft: number, coverRight: number) => {
         this.eventBuffer.push({ ev: 'rain_start', intensity: round2(intensity), coverLeft: round2(coverLeft), coverRight: round2(coverRight) });
       },

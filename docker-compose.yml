@@ -1,30 +1,30 @@
 # ════════════════════════════════════════════════
-# Elemental Clash — 게임노드 운영자용 Docker Compose
+# Elemental Clash — 게임노드 Docker Compose
 #
-# 사용법:
-#   1. .env.example을 .env로 복사 후 값 설정
-#   2. docker compose up -d
-#   3. Watchtower가 새 이미지를 자동 감지 → pull → 재시작
+# Docker Hub 이미지 + Watchtower 자동 업데이트
 #
+# 실행: docker compose up -d
+# 로그: docker compose logs -f
 # ════════════════════════════════════════════════
 
 services:
-  # ─── 게임노드 ───
-  game-node:
+  # ─── 게임노드 A (Docker Hub 이미지) ───
+  node-a:
     image: soominsa/turgame-node:latest
-    container_name: turgame-node
+    container_name: node-a
     env_file: .env
     environment:
+      NODE_ID: "node-a"
       NODE_PORT: "7301"
-    ports:
-      - "7301:7301"
+      NODE_MODE: "relay"
+      NODE_REGION: "local"
+      NODE_MAX_ROOMS: "20"
     restart: unless-stopped
 
-  # ─── Watchtower (자동 업데이트) ───
+  # ─── Watchtower (node-a 자동 업데이트) ───
   watchtower:
     image: containrrr/watchtower
-    container_name: watchtower
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --interval 60 --cleanup --include-stopped turgame-node
+    command: --interval 60 --cleanup --include-stopped node-a
     restart: unless-stopped
