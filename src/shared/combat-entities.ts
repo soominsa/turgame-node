@@ -1,4 +1,6 @@
 import type { ElementType, FieldEffectType, PassiveSheet } from './characters/char-sheet.js';
+import type { SigilEffect } from './rune/sigil-types.js';
+import type { GlyphEffect } from './rune/glyph-types.js';
 
 export interface Entity {
   id: string;
@@ -60,6 +62,9 @@ export interface Entity {
   elemDebuff: number;        // 디버프 남은 시간 (0=없음)
   elemChargeTimer: number;   // 충전 중 타이머
   elemChargeType: 'buff' | 'debuff' | null;  // 현재 충전 중인 타입
+  // 룬 시스템 (룬전에서만 존재)
+  sigilEffect?: SigilEffect;       // 시길 효과 (매치 시작 시 계산)
+  glyphEffects?: GlyphEffect[];    // 글리프 효과 (팀 단위 공유)
 }
 
 export interface Skill {

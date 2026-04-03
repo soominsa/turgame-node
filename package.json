@@ -1,7 +1,7 @@
 {
-  "name": "elemental-clash-node",
+  "name": "ashcycle-node",
   "version": "1.0.0",
-  "description": "Elemental Clash 게임노드 — 서버 운영자용",
+  "description": "Ashcycle 게임노드 — 서버 운영자용",
   "type": "module",
   "scripts": {
     "start": "npx tsx --type-check src/index.ts",

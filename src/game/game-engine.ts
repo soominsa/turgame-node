@@ -4,6 +4,8 @@
  */
 
 import { Entity, Skill } from '../shared/combat-entities.js';
+import type { SigilEffect, SigilStatKey, UniqueEffectId } from '../shared/rune/sigil-types.js';
+import { type GlyphEffect, PASSIVE_GLYPHS, ACTIVE_GLYPHS, isPassiveGlyph, RARE_GLYPH_BONUS } from '../shared/rune/glyph-types.js';
 import { FieldGrid } from '../core/types.js';
 import { createFieldGrid, tickField, setTileChangeCallback } from '../core/tick-engine.js';
 import { createWood, createWater, createSoil } from '../core/materials.js';
@@ -74,6 +76,8 @@ export class GameEngine {
   // 5초간 누적 이동 거리 (도리도리 감지용)
   private moveAccum = new Map<string, number>();
   private lastAccumReset = 0;
+  // 룬 시스템
+  runeMode = false;
 
   constructor(config: Partial<GameConfig> = {}, callbacks: GameCallbacks = {}) {
     this.config = { ...defaultConfig(), ...config };
@@ -181,6 +185,12 @@ export class GameEngine {
         if (!e.dead) this.chargeUlt(e, ULT_CHARGE.perTick);
       }
       this.state.tickAccum -= this.config.tickInterval;
+    }
+
+    // 룬 시스템 틱
+    if (this.runeMode) {
+      this.tickGlyphs(dt);
+      this.tickUniqueEffects(dt);
     }
 
     for (const e of this.state.entities) {
@@ -721,6 +731,7 @@ export class GameEngine {
     if (killer && killer.team !== e.team) {
       killer.kills++;
       this.chargeUlt(killer, ULT_CHARGE.kill);
+      this.triggerKillUniqueEffect(killer);
     }
     // 어시스트: 같은 팀이 5초 내 대미지 준 적이 죽으면 충전
     for (const ally of this.state.entities) {
@@ -931,6 +942,7 @@ export class GameEngine {
       case '에리스': { // 태풍의 눈: 산소 박탈 → 불 꺼짐
         const r = Math.ceil(10 / 2);
         const hexes = hexesInRange(uh.col, uh.row, r, this.config.fieldW, this.config.fieldH);
+        let extinguished = false;
         for (const h of hexes) {
           const cell = this.state.field[h.row]?.[h.col];
           if (!cell?.material) continue;
@@ -939,7 +951,12 @@ export class GameEngine {
               (cell.material.thermalState === 'burning' || cell.material.thermalState === 'smoldering')) {
             cell.material.thermalState = 'charcoal';
             cell.material.temperature = 20;
+            extinguished = true;
           }
+        }
+        // 불이 꺼졌다면 연기/증기 이펙트 (회색)
+        if (extinguished) {
+          this.callbacks.onProjectileHit?.(e.x, e.y, 5, '#cccccc');
         }
         break;
       }
@@ -1506,41 +1523,67 @@ export class GameEngine {
       }
       this.callbacks.onCombo?.(combo.name, combo.icon, cx, cy, combo.radius, combo.damage < 0);
       this.callbacks.onLog?.(this.state.time, `${combo.icon} [콤보] ${combo.name}! (${affected.length}명 피격)`);
+      
+      // 콤보 발생 시 강한 시각적 피드백 (화면 흔들림 등 유도)
+      const comboColor = combo.name === '감전' ? '#ffff00' : combo.name === '수증기 폭발' ? '#ffffff' : '#ffcc00';
+      this.callbacks.onProjectileHit?.(cx, cy, combo.radius, comboColor);
     }
 
     // ─── 기존 필드이펙트 적용 ───
     const r = Math.ceil(radius / 2);
     const hexes = hexesInRange(cx, cy, r, this.config.fieldW, this.config.fieldH);
+    let changedCount = 0;
+    
     for (const h of hexes) {
       const nx = h.col, ny = h.row;
       const cell = this.state.field[ny][nx];
       const dist = hexDistance(cx, cy, nx, ny);
+      let changed = false;
+
       switch (effect) {
         case 'ignite': {
           if (cell.material && cell.material.type === 'wood') {
-            if (dist === 0) cell.material.temperature = 350;
-            else if (dist === 1) cell.material.temperature = Math.max(cell.material.temperature, 180);
+            if (dist === 0) { cell.material.temperature = 350; changed = true; }
+            else if (dist === 1) { cell.material.temperature = Math.max(cell.material.temperature, 180); changed = true; }
           } else if (!cell.material && dist <= 1) {
             const w = createWood(5);
             w.temperature = dist === 0 ? 350 : 180;
             cell.material = w;
+            changed = true;
           }
           break;
         }
         case 'freeze':
-          if (!cell.material) cell.material = createWater(3);
-          if (cell.material.type === 'water') { cell.material.temperature = 0; cell.material.thermalState = 'frozen'; }
+          if (!cell.material) { cell.material = createWater(3); changed = true; }
+          if (cell.material.type === 'water') { 
+            cell.material.temperature = 0; 
+            cell.material.thermalState = 'frozen'; 
+            changed = true; 
+          }
           break;
         case 'water':
-          if (!cell.material) cell.material = createWater(4);
+          if (!cell.material) { cell.material = createWater(4); changed = true; }
           break;
         case 'grow':
-          if (!cell.material) cell.material = createWood(3);
+          if (!cell.material) { cell.material = createWood(3); changed = true; }
           break;
         case 'mud':
-          if (!cell.material) { const s = createSoil(3); s.thermalState = 'damp'; cell.material = s; }
+          if (!cell.material) { const s = createSoil(3); s.thermalState = 'damp'; cell.material = s; changed = true; }
           break;
       }
+      if (changed) changedCount++;
+    }
+
+    // 타일이 실제로 변했다면 시각적 피드백 (먼지/물방울/불꽃 등)
+    if (changedCount > 0) {
+      let effectColor = '#ffffff';
+      if (effect === 'ignite') effectColor = '#ff4400';
+      else if (effect === 'freeze') effectColor = '#88ccff';
+      else if (effect === 'water') effectColor = '#4488ff';
+      else if (effect === 'grow') effectColor = '#44aa44';
+      else if (effect === 'mud') effectColor = '#886644';
+      
+      this.callbacks.onProjectileHit?.(cx, cy, radius, effectColor);
     }
   }
 
@@ -1707,6 +1750,197 @@ export class GameEngine {
       findNearestEnemyIgnoreWalls: (e) => this.findNearestEnemyIgnoreWalls(e),
       useUltimate: (e) => this.useUltimate(e),
     };
+  }
+
+  // ─── 룬 시스템 ───
+
+  /** 매치 시작 시 시길 효과를 엔티티 기본 스탯에 적용 (곱연산) */
+  applySigilEffects(entities: Entity[]) {
+    for (const e of entities) {
+      if (!e.sigilEffect) continue;
+      const mods = e.sigilEffect.statModifiers;
+      // 각 스탯에 곱연산 적용
+      if (mods.has('attackDamage'))   e.attackDamage   *= (1 + (mods.get('attackDamage')!));
+      if (mods.has('attackSpeed'))    e.attackSpeed     *= (1 + (mods.get('attackSpeed')!));
+      if (mods.has('attackRange'))    e.attackRange     *= (1 + (mods.get('attackRange')!));
+      if (mods.has('hp'))             { e.maxHp *= (1 + (mods.get('hp')!)); e.hp = e.maxHp; }
+      if (mods.has('defense'))        e.buffs.push({ type: 'defense', remaining: 99999, multiplier: 1 + (mods.get('defense')!) });
+      if (mods.has('speed'))          e.speed *= (1 + (mods.get('speed')!));
+      if (mods.has('cooldownReduce')) {
+        const cdRed = mods.get('cooldownReduce')!;
+        for (const sk of e.skills) sk.cooldown *= (1 - cdRed);
+      }
+    }
+  }
+
+  /** 매치 시작 시 패시브 글리프 자동 발동 */
+  initPassiveGlyphs(teams: { teamIdx: number; glyphs: GlyphEffect[] }[]) {
+    for (const { teamIdx, glyphs } of teams) {
+      const team = teamIdx === 0 ? 'A' : 'B';
+      const teamEntities = this.state.entities.filter(e => e.team === team);
+      for (const g of glyphs) {
+        if (g.type !== 'passive') continue;
+        const def = PASSIVE_GLYPHS[g.glyphType as keyof typeof PASSIVE_GLYPHS];
+        if (!def) continue;
+        const rareBonus = g.grade === 'Rare' ? RARE_GLYPH_BONUS : 0;
+        const value = (def.value * (1 + rareBonus)) / 100;
+        g.remainingDuration = def.duration;
+        // 팀 전체에 버프 적용
+        for (const e of teamEntities) {
+          e.glyphEffects = e.glyphEffects ?? [];
+          e.glyphEffects.push(g);
+          if (def.stat === 'defense') {
+            e.buffs.push({ type: 'defense', remaining: def.duration, multiplier: 1 + value });
+          } else if (def.stat === 'speed') {
+            e.buffs.push({ type: 'speed', remaining: def.duration, multiplier: 1 + value });
+          } else if (def.stat === 'attackSpeed') {
+            e.attackSpeed *= (1 + value);
+          }
+          // hpRegen은 tickGlyphs에서 처리
+        }
+      }
+    }
+  }
+
+  /** 매 틱: 패시브 글리프 지속시간 감소 + hpRegen 처리 */
+  private tickGlyphs(dt: number) {
+    for (const e of this.state.entities) {
+      if (e.dead || !e.glyphEffects) continue;
+      for (const g of e.glyphEffects) {
+        if (g.type !== 'passive' || g.remainingDuration == null) continue;
+        g.remainingDuration -= dt;
+        // hpRegen 처리
+        if (g.glyphType === 'regen' && g.remainingDuration > 0) {
+          const rareBonus = g.grade === 'Rare' ? RARE_GLYPH_BONUS : 0;
+          const regenPct = (PASSIVE_GLYPHS.regen.value * (1 + rareBonus)) / 100;
+          e.hp = Math.min(e.maxHp, e.hp + e.maxHp * regenPct * dt);
+        }
+      }
+    }
+  }
+
+  /** 매 틱: Legendary 고유 효과 트리거 체크 */
+  private tickUniqueEffects(_dt: number) {
+    for (const e of this.state.entities) {
+      if (e.dead || !e.sigilEffect?.uniqueEffect) continue;
+      const ue = e.sigilEffect.uniqueEffect;
+      // earth_fortitude: HP 30% 이하 시 방어력 2배
+      if (ue === 'earth_fortitude' && e.hp > 0 && e.hp / e.maxHp <= 0.3) {
+        const hasFortBuff = e.buffs.some(b => (b as any).__fortitude);
+        if (!hasFortBuff) {
+          const buff = { type: 'defense' as const, remaining: 999, multiplier: 2, __fortitude: true } as any;
+          e.buffs.push(buff);
+        }
+      }
+    }
+  }
+
+  /** 킬 시 고유 효과 처리 (killEntity에서 호출) */
+  private triggerKillUniqueEffect(killer: Entity) {
+    if (!this.runeMode || !killer.sigilEffect?.uniqueEffect) return;
+    // fire_afterimage: 킬 시 3초간 이속 +20%
+    if (killer.sigilEffect.uniqueEffect === 'fire_afterimage') {
+      killer.buffs.push({ type: 'speed', remaining: 3, multiplier: 1.2 });
+    }
+  }
+
+  /** 스킬 적중 시 고유 효과 처리 */
+  triggerSkillHitUniqueEffect(user: Entity, skill: Skill) {
+    if (!this.runeMode || !user.sigilEffect?.uniqueEffect) return;
+    // water_cascade: 스킬 적중 시 15% 확률 쿨다운 초기화
+    if (user.sigilEffect.uniqueEffect === 'water_cascade' && Math.random() < 0.15) {
+      skill.remaining = 0;
+    }
+  }
+
+  /** 힐 시 고유 효과 처리 */
+  triggerHealUniqueEffect(healer: Entity, target: Entity, healAmount: number) {
+    if (!this.runeMode || !healer.sigilEffect?.uniqueEffect) return;
+    // nature_cycle: 힐 시 10% 확률로 주변 아군 50% 힐
+    if (healer.sigilEffect.uniqueEffect === 'nature_cycle' && Math.random() < 0.10) {
+      const nearbyAllies = this.state.entities.filter(
+        a => a.team === healer.team && a !== target && !a.dead
+          && Math.hypot(a.x - target.x, a.y - target.y) < 3
+      );
+      for (const ally of nearbyAllies) {
+        ally.hp = Math.min(ally.maxHp, ally.hp + healAmount * 0.5);
+      }
+    }
+  }
+
+  /** 글리프 발동 (플레이어 입력) */
+  activateGlyph(teamIdx: number, slotIndex: number, targetHex?: { col: number; row: number }) {
+    const team = teamIdx === 0 ? 'A' : 'B';
+    const teamEntities = this.state.entities.filter(e => e.team === team);
+    if (teamEntities.length === 0) return;
+
+    const glyphs = teamEntities[0].glyphEffects;
+    if (!glyphs || slotIndex >= glyphs.length) return;
+
+    const g = glyphs[slotIndex];
+    if (g.type !== 'active' || g.used) return;
+
+    const activeDef = ACTIVE_GLYPHS[g.glyphType as keyof typeof ACTIVE_GLYPHS];
+    if (!activeDef) return;
+
+    g.used = true;
+
+    // 타일 변경 효과 적용
+    if (targetHex) {
+      const radius = activeDef.radius;
+      const hexes = hexesInRange(targetHex.col, targetHex.row, radius, this.config.fieldW, this.config.fieldH);
+
+      switch (g.glyphType) {
+        case 'flame_spread':
+          for (const h of hexes) {
+            const cell = this.state.field[h.row]?.[h.col];
+            if (cell?.material?.type === 'wood') {
+              cell.material.thermalState = 'burning';
+            }
+          }
+          break;
+        case 'rapid_growth':
+          for (const h of hexes) {
+            const cell = this.state.field[h.row]?.[h.col];
+            if (cell && !cell.material) cell.material = createWood();
+          }
+          break;
+        case 'flood':
+          for (const h of hexes) {
+            const cell = this.state.field[h.row]?.[h.col];
+            if (cell && !cell.material) cell.material = createWater();
+          }
+          break;
+        case 'earth_seal':
+          // 5초간 타일 변화 차단 (sealed 플래그)
+          for (const h of hexes) {
+            const cell = this.state.field[h.row]?.[h.col];
+            if (cell) (cell as any).__sealed = 5;
+          }
+          break;
+        case 'reconfigure':
+          for (const h of hexes) {
+            const cell = this.state.field[h.row]?.[h.col];
+            if (cell) {
+              const factories = [createWood, createWater, createSoil];
+              cell.material = factories[Math.floor(Math.random() * factories.length)]();
+            }
+          }
+          break;
+      }
+    }
+
+    // overcharge: 아군 1명 3초간 타일 효과 무시
+    if (g.glyphType === 'overcharge') {
+      const alive = teamEntities.filter(e => !e.dead);
+      if (alive.length > 0) {
+        // 가장 HP가 낮은 아군에게 적용
+        const lowest = alive.reduce((a, b) => a.hp / a.maxHp < b.hp / b.maxHp ? a : b);
+        lowest.invincibleTimer = Math.max(lowest.invincibleTimer, 3);
+      }
+    }
+
+    this.callbacks.onLog?.(this.state.time, `${team}팀 글리프 발동: ${g.glyphType}`);
   }
 
   // ─── 로그 ───

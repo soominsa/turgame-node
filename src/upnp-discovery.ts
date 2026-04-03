@@ -20,7 +20,7 @@ export interface UPnPResult {
   publicUrl: string;
 }
 
-const MAPPING_DESCRIPTION = 'Elemental Clash Game Node';
+const MAPPING_DESCRIPTION = 'Ashcycle Game Node';
 const MAPPING_TTL = 3600; // 1시간 (heartbeat에서 갱신)
 
 let _client: Client | null = null;

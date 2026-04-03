@@ -23,6 +23,8 @@ export type C2S =
   | { type: 'ready' }
   | { type: 'start_game' }         // 호스트만
   | { type: 'input'; mx: number; my: number; skills: number[]; attack: boolean }
+  // 룬 시스템
+  | { type: 'activate_glyph'; slotIndex: number; targetHex?: { col: number; row: number } }
   // 킵얼라이브
   | { type: 'ping' };
 

@@ -236,6 +236,11 @@ export class OnlineAdapter {
     this.sendToNode({ type: 'input', mx, my, skills, attack });
   }
 
+  /** 글리프 발동 메시지 전송 (룬전) */
+  activateGlyph(slotIndex: number, targetHex?: { col: number; row: number }) {
+    this.sendToNode({ type: 'activate_glyph', slotIndex, targetHex });
+  }
+
   onEvent(callback: (ev: GameEvent) => void) {
     this.eventCallback = callback;
   }

@@ -4,6 +4,8 @@
 
 import { WebSocket } from 'ws';
 import { Entity } from '../shared/combat-entities.js';
+import type { SigilEffect } from '../shared/rune/sigil-types.js';
+import type { GlyphEffect } from '../shared/rune/glyph-types.js';
 import { GameEngine, CapturePoint, Wall, ResourceTerrain } from '../game/game-engine.js';
 import { runAI, clearAIStrategies } from '../game/ai-module.js';
 import { createFieldGrid } from '../core/tick-engine.js';
@@ -14,7 +16,7 @@ import {
   SerializedCell, TileChange, round2,
 } from '../shared/protocol.js';
 import { FIELD_W, FIELD_H, SPAWN_A, SPAWN_B, createPoints as mapPoints, createWalls as mapWalls, createTerrains as mapTerrains, generateFieldTerrain } from '../shared/map-data.js';
-import { ALL_CHARS, pickBalancedTeam } from '../shared/char-defs.js';
+import { ALL_CHARS, pickBalancedTeam, SHEETS } from '../shared/char-defs.js';
 import { calculateRewards, toMatchEntity, type PlayerReward, type EntityExtras } from './reward-calculator.js';
 
 /** 매치 종료 리포트 (노드 → 중앙서버 전달용) */
@@ -66,12 +68,25 @@ interface PlayerConn {
 }
 
 export type RoomPhase = 'lobby' | 'game' | 'ended';
+export type MatchMode = 'normal' | 'runed' | 'ranked_runed';
+
+/** 룬전 진입 시 플레이어별 룬 데이터 */
+export interface PlayerRuneData {
+  wallet: string;
+  /** 캐릭터별 시길 효과 (characterId → SigilEffect) */
+  sigilEffects: Map<string, SigilEffect>;
+  /** 장착 글리프 (최대 2개) */
+  glyphEffects: GlyphEffect[];
+}
 
 export class GameRoom {
   id: string;
   players: PlayerConn[] = [];
   hostId: string | null = null;
   phase: RoomPhase = 'lobby';
+  matchMode: MatchMode = 'normal';
+  /** 룬전 시 플레이어별 룬 데이터 */
+  private playerRuneData = new Map<string, PlayerRuneData>();
 
   private engine: GameEngine | null = null;
   private tickInterval: ReturnType<typeof setInterval> | null = null;
@@ -192,7 +207,18 @@ export class GameRoom {
         const attack = !!msg.attack;
         player.input = { mx, my, skills, attack };
         break;
+
+      case 'activate_glyph':
+        if (this.phase !== 'game' || !this.engine?.runeMode) return;
+        const glyphTeamIdx = player.team === 'A' ? 0 : 1;
+        this.engine.activateGlyph(glyphTeamIdx, msg.slotIndex, msg.targetHex);
+        break;
     }
+  }
+
+  /** 룬전 데이터 설정 (매치 시작 전 호출) */
+  setPlayerRuneData(wallet: string, data: PlayerRuneData) {
+    this.playerRuneData.set(wallet, data);
   }
 
   // ─── 게임 시작 ───
@@ -254,6 +280,40 @@ export class GameRoom {
     // AI (빈 슬롯용)
     this.engine.setAIRunner((e, ctx) => runAI(e, ctx));
     this.engine.initGame(entities, points, walls, field, terrains);
+
+    // 룬전 모드 적용
+    const isRuneMode = this.matchMode === 'runed' || this.matchMode === 'ranked_runed';
+    if (isRuneMode) {
+      this.engine.runeMode = true;
+      // 시길 효과 적용
+      for (const [wallet, runeData] of this.playerRuneData) {
+        const player = this.players.find(p => p.wallet === wallet);
+        if (!player?.entityId) continue;
+        const entity = entities.find(e => e.id === player.entityId);
+        if (!entity) continue;
+        const charId = SHEETS[player.charIndex]?.id;
+        if (charId && runeData.sigilEffects.has(charId)) {
+          entity.sigilEffect = runeData.sigilEffects.get(charId);
+        }
+        // 글리프는 팀 전체 공유 — 첫 번째 플레이어 것으로 세팅
+        if (runeData.glyphEffects.length > 0) {
+          entity.glyphEffects = [...runeData.glyphEffects];
+        }
+      }
+      this.engine.applySigilEffects(entities);
+      // 글리프 초기화
+      const teamGlyphs: { teamIdx: number; glyphs: GlyphEffect[] }[] = [];
+      for (const team of ['A', 'B'] as const) {
+        const teamIdx = team === 'A' ? 0 : 1;
+        const teamEntity = entities.find(e => e.team === team && e.glyphEffects?.length);
+        if (teamEntity?.glyphEffects) {
+          teamGlyphs.push({ teamIdx, glyphs: teamEntity.glyphEffects });
+        }
+      }
+      if (teamGlyphs.length > 0) {
+        this.engine.initPassiveGlyphs(teamGlyphs);
+      }
+    }
 
     // 보상 추적 초기화
     this.matchStartTime = Date.now();
@@ -417,6 +477,20 @@ export class GameRoom {
         durationSec,
         entities: matchEntities,
       });
+
+      // 룬전 보상 배율 ×1.15 + 글리프 소멸
+      if (this.engine.runeMode) {
+        const RUNE_REWARD_MULT = 1.15;
+        for (const r of rewards) {
+          if (!r.blocked) {
+            r.water = Math.round(r.water * RUNE_REWARD_MULT);
+            r.soil  = Math.round(r.soil  * RUNE_REWARD_MULT);
+            r.heat  = Math.round(r.heat  * RUNE_REWARD_MULT);
+          }
+        }
+        // 글리프 소멸 (playerRuneData 정리)
+        this.playerRuneData.clear();
+      }
 
       // 엔티티 → 지갑 매핑
       const entityToWallet = new Map<string, string>();

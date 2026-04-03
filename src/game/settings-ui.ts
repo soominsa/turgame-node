@@ -135,6 +135,8 @@ export const COLOR_PALETTES: Record<ColorMode, ColorPalette> = {
 
 // ─── 게임 설정 인터페이스 ───
 
+export type LangCode = 'ko' | 'en' | 'ja' | 'zh';
+
 export interface GameSettings {
   // 사운드
   sfxVolume: number;    // 0~1
@@ -146,6 +148,7 @@ export interface GameSettings {
   // 게임
   aiDifficulty: AIDifficulty;
   gameSpeed: number;    // 0.5, 1.0, 1.5
+  language: LangCode;   // 언어
   // 키 힌트
   showKeyHints: boolean;       // 상시 표시 여부
   keyHintsShownOnce: boolean;  // 10초 힌트 이미 표시했는지
@@ -162,13 +165,22 @@ const DEFAULT_SETTINGS: GameSettings = {
   fontSize: 1.0,
   aiDifficulty: 'normal',
   gameSpeed: 1.0,
+  language: 'ko',
   showKeyHints: false,
   keyHintsShownOnce: false,
   tutorialCompleted: false,
   tutorialOffered: false,
 };
 
-const STORAGE_KEY = 'elemental_clash_settings';
+const LANG_LABELS: Record<LangCode, string> = {
+  ko: '한국어',
+  en: 'English',
+  ja: '日本語',
+  zh: '中文',
+};
+const SUPPORTED_LANGS: LangCode[] = ['ko', 'en'];
+
+const STORAGE_KEY = 'ashcycle_settings';
 
 // ─── 싱글톤 설정 ───
 
@@ -228,6 +240,12 @@ export interface SettingsRenderContext {
 }
 
 let settingsOpen = false;
+let onLanguageChangeCallback: ((lang: LangCode) => void) | null = null;
+
+/** 클라이언트에서 언어 변경 콜백 등록 (i18n setLanguage 연동) */
+export function setOnLanguageChange(cb: (lang: LangCode) => void): void {
+  onLanguageChangeCallback = cb;
+}
 
 export function isSettingsOpen(): boolean { return settingsOpen; }
 export function openSettings(): void { settingsOpen = true; }
@@ -291,6 +309,8 @@ export function renderSettings(rc: SettingsRenderContext): void {
   drawOptionRow(ctx, leftX, rightX, cy, '게임 속도',
     settings.gameSpeed === 0.5 ? '0.5x 느리게' :
     settings.gameSpeed === 1.5 ? '1.5x 빠르게' : '1.0x 보통');
+  cy += rowH;
+  drawOptionRow(ctx, leftX, rightX, cy, '🌐 언어', LANG_LABELS[settings.language] || settings.language);
   cy += rowH;
 
   // ─── 접근성 ───
@@ -456,6 +476,16 @@ export function handleSettingsClick(x: number, y: number, canvasW: number, canva
     const speeds = [0.5, 1.0, 1.5];
     const idx = speeds.indexOf(settings.gameSpeed);
     updateSettings({ gameSpeed: speeds[(idx + 1) % speeds.length] });
+    return true;
+  }
+  cy += rowH;
+
+  // 언어
+  if (y >= cy && y <= cy + 20) {
+    const idx = SUPPORTED_LANGS.indexOf(settings.language);
+    const newLang = SUPPORTED_LANGS[(idx + 1) % SUPPORTED_LANGS.length];
+    updateSettings({ language: newLang });
+    if (onLanguageChangeCallback) onLanguageChangeCallback(newLang);
     return true;
   }
   cy += rowH;

@@ -1,5 +1,5 @@
 /**
- * Elemental Clash 게임노드
+ * Ashcycle 게임노드
  *
  * 역할: 게임 방 실행, 16Hz 틱 루프, AI, 물리 연산
  * 토큰/인증 DB 접근 없음 — 매치 결과만 중앙서버에 보고
@@ -81,7 +81,7 @@ wss.on('connection', (ws) => {
 // ─── 연결 모드 결정 + 서버 시작 ───
 
 server.listen(config.port, async () => {
-  console.log(`🎮 Elemental Clash 게임노드 시작`);
+  console.log(`🎮 Ashcycle 게임노드 시작`);
   console.log(`   노드 ID: ${config.nodeId}`);
   console.log(`   로컬 포트: ${config.port}`);
   console.log(`   중앙서버: ${config.centralUrl}`);
