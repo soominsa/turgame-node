@@ -581,6 +581,11 @@ export class OnlineAdapter {
     }
   }
 
+  /** 중앙서버 REST API 호출 (외부 노출) */
+  async postApi<T>(path: string, body: any): Promise<T> {
+    return this.post<T>(path, body);
+  }
+
   /** 게임노드로 메시지 전송 (게임 조작) */
   private sendToNode(msg: any) {
     if (this.nodeWs && this.nodeWs.readyState === WebSocket.OPEN) {

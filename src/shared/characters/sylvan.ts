@@ -28,7 +28,7 @@ const sylvan: CharSheet = {
   // ── 기본 공격 ──
   attackDamage: 20,
   attackSpeed: 1.3,
-  attackRange: 9,
+  attackRange: 6,
 
   // ── 패시브 ──
   passives: [
@@ -54,7 +54,7 @@ const sylvan: CharSheet = {
       cooldown: 2,
       initialCooldown: 0,
       damage: 30,
-      range: 10,
+      range: 7,
       stunDuration: 0,
       aoe: 0,
       projectileSpeed: 20,
@@ -69,7 +69,7 @@ const sylvan: CharSheet = {
       cooldown: 6,
       initialCooldown: 3,
       damage: 8,
-      range: 10,
+      range: 7,
       stunDuration: 0,
       aoe: 0,
       projectileSpeed: 15,
@@ -85,7 +85,7 @@ const sylvan: CharSheet = {
       cooldown: 5,
       initialCooldown: 2,
       damage: 35,
-      range: 10,
+      range: 7,
       stunDuration: 0.3,
       aoe: 3,
       windupTime: 0.2,
@@ -103,7 +103,7 @@ const sylvan: CharSheet = {
     castTime: 0.5,
     color: '#44AA44',
     screenColor: 'rgba(68,170,68,0.35)',
-    radius: 9,
+    radius: 7,
     damage: 45,
     stunDuration: 0.8,
     vfx: { cast: 'pm_poison', hit: 'cm_vortex', scale: 1.5 },

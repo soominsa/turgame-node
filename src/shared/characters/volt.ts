@@ -28,7 +28,7 @@ const volt: CharSheet = {
   // ── 기본 공격 ──
   attackDamage: 24,
   attackSpeed: 0.9,
-  attackRange: 12,
+  attackRange: 7,
 
   // ── 패시브 ──
   passives: [
@@ -62,7 +62,7 @@ const volt: CharSheet = {
       cooldown: 2,
       initialCooldown: 0,
       damage: 50,
-      range: 12,
+      range: 8,
       stunDuration: 0.3,
       aoe: 0,
       projectileSpeed: 30,
@@ -77,7 +77,7 @@ const volt: CharSheet = {
       cooldown: 7,
       initialCooldown: 3,
       damage: 28,
-      range: 10,
+      range: 7,
       stunDuration: 1.5,
       aoe: 3,
       windupTime: 0.2,
@@ -92,7 +92,7 @@ const volt: CharSheet = {
       cooldown: 8,
       initialCooldown: 4,
       damage: 40,
-      range: 12,
+      range: 8,
       stunDuration: 0.5,
       aoe: 0,
       projectileSpeed: 35,
@@ -111,7 +111,7 @@ const volt: CharSheet = {
     castTime: 0.8,
     color: '#FFEE44',
     screenColor: 'rgba(255,238,68,0.4)',
-    radius: 10,
+    radius: 7,
     damage: 45,
     stunDuration: 2.0,
     vfx: { cast: 'sp_lightning_strike', hit: 'sp_lightning_burst', scale: 2.0 },
