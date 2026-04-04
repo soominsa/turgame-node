@@ -19,7 +19,7 @@ export interface ForgeGlyphInput {
   wallet: string;
   glyphType: GlyphTypeId;
   grade: GlyphGrade;
-  materials: { wood: number; heat: number; water: number };
+  materials: { wood: number; soil: number };
   hasNftCharacter: boolean;
   currentInventoryCount: number;
 }
@@ -67,7 +67,7 @@ export function forgeGlyph(input: ForgeGlyphInput): ForgeGlyphResult {
 
   // 4. 비용 확인
   const cost = GLYPH_CRAFT_COST[grade];
-  if (materials.wood < cost.wood || materials.heat < cost.heat || materials.water < cost.water) {
+  if (materials.wood < cost.wood || materials.soil < cost.soil) {
     throw new Error('재료 부족');
   }
 

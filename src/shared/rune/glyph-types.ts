@@ -67,9 +67,9 @@ export interface GlyphEffect {
 // ── 제작 비용 ──
 
 export const GLYPH_CRAFT_COST: Record<GlyphGrade, CraftCost> = {
-  Common:   { wood: 5,  heat: 3,  water: 0 },
-  Uncommon: { wood: 15, heat: 8,  water: 0 },
-  Rare:     { wood: 30, heat: 15, water: 5 },
+  Common:   { wood: 5,  soil: 0  },
+  Uncommon: { wood: 15, soil: 5  },
+  Rare:     { wood: 30, soil: 10 },
 };
 
 // ── 제작 자격 (캐릭터 NFT 여부) ──

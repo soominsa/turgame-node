@@ -16,8 +16,7 @@ import {
 
 export interface MaterialBalance {
   wood: number;
-  heat: number;
-  water: number;
+  soil: number;
 }
 
 // ── 제작 입력 ──
@@ -31,8 +30,8 @@ export interface ForgeSigilInput {
   hasNftCharacter: boolean;
   /** 총 매치 수 (시드 재료) */
   totalMatches: number;
-  /** 총 Heat 획득량 (시드 재료) */
-  totalHeat: number;
+  /** 총 $SEED 획득량 (시드 재료) */
+  totalSeed: number;
 }
 
 export interface ForgeSigilResult {
@@ -62,17 +61,12 @@ function createRng(seed: number) {
   };
 }
 
-// ── 원소 결정 (재료 비율 기반) ──
+// ── 원소 결정 (v5: RNG 기반, 4원소 균등) ──
 
-function determineElement(materials: MaterialBalance): SigilElement {
-  const total = materials.wood + materials.heat + materials.water;
-  if (total === 0) return 'earth';
-  const woodRatio = materials.wood / total;
-  const heatRatio = materials.heat / total;
-  if (woodRatio > 0.6) return 'nature';
-  if (heatRatio > 0.5) return 'fire';
-  if (materials.water > 0 && woodRatio > 0.3) return 'water';
-  return 'earth';
+const ELEMENTS: SigilElement[] = ['fire', 'water', 'earth', 'nature'];
+
+function determineElement(rng: () => number): SigilElement {
+  return ELEMENTS[Math.floor(rng() * ELEMENTS.length)];
 }
 
 // ── 스탯 키 목록 ──
@@ -82,7 +76,7 @@ const ALL_STAT_KEYS = Object.keys(SIGIL_STAT_POOL) as SigilStatKey[];
 // ── 메인 제작 함수 ──
 
 export function forgeSigil(input: ForgeSigilInput): ForgeSigilResult {
-  const { wallet, grade, materials, serverNonce, hasNftCharacter, totalMatches, totalHeat } = input;
+  const { wallet, grade, materials, serverNonce, hasNftCharacter, totalMatches, totalSeed } = input;
 
   // 1. 제작 자격 확인
   if (grade === 'Legendary' && !hasNftCharacter) {
@@ -91,17 +85,17 @@ export function forgeSigil(input: ForgeSigilInput): ForgeSigilResult {
 
   // 2. 비용 확인
   const cost = SIGIL_CRAFT_COST[grade];
-  if (materials.wood < cost.wood || materials.heat < cost.heat || materials.water < cost.water) {
+  if (materials.wood < cost.wood || materials.soil < cost.soil) {
     throw new Error('재료 부족');
   }
 
   // 3. 랜덤 시드 생성
-  const seedStr = `${wallet}:${Date.now()}:${totalMatches}:${totalHeat}:${serverNonce}`;
+  const seedStr = `${wallet}:${Date.now()}:${totalMatches}:${totalSeed}:${serverNonce}`;
   const seed = simpleHash(seedStr);
   const rng = createRng(seed);
 
-  // 4. 원소 결정
-  const element = determineElement(materials);
+  // 4. 원소 결정 (v5: RNG 기반)
+  const element = determineElement(rng);
 
   // 5. 등급 규칙
   const rule = GRADE_RULES[grade];

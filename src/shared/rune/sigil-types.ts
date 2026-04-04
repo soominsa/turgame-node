@@ -191,13 +191,12 @@ export const ROLE_SYNERGIES: RoleSynergy[] = [
 
 export interface CraftCost {
   wood: number;
-  heat: number;
-  water: number;
+  soil: number;
 }
 
 export const SIGIL_CRAFT_COST: Record<SigilGrade, CraftCost> = {
-  Common:    { wood: 30,  heat: 20,  water: 0  },
-  Uncommon:  { wood: 60,  heat: 40,  water: 0  },
-  Rare:      { wood: 120, heat: 80,  water: 20 },
-  Legendary: { wood: 250, heat: 160, water: 50 },
+  Common:    { wood: 30,  soil: 10  },
+  Uncommon:  { wood: 60,  soil: 20  },
+  Rare:      { wood: 120, soil: 40  },
+  Legendary: { wood: 250, soil: 80  },
 };
