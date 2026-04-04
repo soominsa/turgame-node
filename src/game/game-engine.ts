@@ -12,7 +12,7 @@ import { createWood, createWater, createSoil } from '../core/materials.js';
 import { hexesInRange, hexDistance, worldToHex, hexNeighborsBounded } from '../core/hex.js';
 import { NavGrid } from './pathfinding.js';
 import { FogOfWar } from './fog-of-war.js';
-import { checkCombo, applyComboEffect, resetComboCooldowns } from './combo-system.js';
+import { checkCombo, applyComboEffect, resetComboCooldowns, type ComboResult } from './combo-system.js';
 import { ULTIMATES, ULT_CHARGE } from './ultimate-defs.js';
 import {
   trySpawnItem, checkPickup, applyItem, updateBuffs, updateItems,
@@ -23,10 +23,20 @@ import {
   updateEvent, tryScheduleEvent, cleanupEvents, createSchedulerState,
   EVENT_INFO, type MapEvent,
 } from './map-events.js';
+import {
+  initPassiveState, tickPassives, onPassiveKill, onPassiveHitTaken,
+  onPassiveSkillHit, onPassiveSkillUse, breakStealth,
+  getPassiveSpeedMult, getPassiveDamageMult, getPassiveBackstab,
+  getPassiveDefenseMult, getPassiveCooldownMult,
+  executeChainAttack, getAerisWindSpeedMult, getTideWaterSpeedMult,
+  onPassiveHeal, getWetTargetDamageMult, onPassiveDash,
+  type PassiveCallbacks,
+} from './passive-system.js';
 
 // 타입은 game-engine-types.ts에서 관리, 여기서 재export
 export type {
   CapturePoint, Wall, Projectile, AOETelegraph,
+  TrapInstance, SummonInstance, SynergyZone,
   ResourceTerrainType, ResourceTerrain,
   RainEvent, GameState, GameConfig, PathAlgorithm,
   GameCallbacks, AIWorldContext, AIRunner,
@@ -64,6 +74,7 @@ export class GameEngine {
   playerControlledId: string | null = null;  // 싱글플레이 하위호환
   playerControlledIds: Set<string> = new Set();  // 멀티플레이: 플레이어 조작 캐릭터 ID 집합
   private baseSpeedMap = new Map<string, number>();
+  private baseVisionMap = new Map<string, number>();
   // 길찾기/벽 체크는 NavGrid 클래스에 위임
   nav = new NavGrid();
   // 팀별 전장의 안개 (AI용 — 렌더링용 FogOfWar와 별개로 각 팀의 시야 추적)
@@ -76,6 +87,8 @@ export class GameEngine {
   // 5초간 누적 이동 거리 (도리도리 감지용)
   private moveAccum = new Map<string, number>();
   private lastAccumReset = 0;
+  // 패시브 시스템 콜백
+  private passiveCb: PassiveCallbacks;
   // 룬 시스템
   runeMode = false;
 
@@ -83,6 +96,16 @@ export class GameEngine {
     this.config = { ...defaultConfig(), ...config };
     this.callbacks = callbacks;
     this.state = this.createEmptyState();
+    // 패시브 시스템 콜백 바인딩
+    this.passiveCb = {
+      applyFieldEffect: (effect, cx, cy, radius, owner) => this.applyFieldEffect(effect, cx, cy, radius, owner),
+      getField: () => this.state.field,
+      getFieldSize: () => ({ w: this.config.fieldW, h: this.config.fieldH }),
+      getEntities: () => this.state.entities,
+      getTime: () => this.state.time,
+      onDamage: (t, amt, x, y) => this.callbacks.onDamage?.(t, amt, x, y),
+      onHeal: (t, amt, x, y) => this.callbacks.onHeal?.(t, amt, x, y),
+    };
   }
 
   private createEmptyState(): GameState {
@@ -95,6 +118,7 @@ export class GameEngine {
       time: 0, tickAccum: 0,
       winner: null,
       projectiles: [], telegraphs: [],
+      traps: [], summons: [], synergyZones: [],
       log: [],
       selectedEntityIdx: 0,
       rain: {
@@ -130,6 +154,9 @@ export class GameEngine {
     this.state.winner = null;
     this.state.projectiles = [];
     this.state.telegraphs = [];
+    this.state.traps = [];
+    this.state.summons = [];
+    this.state.synergyZones = [];
     this.state.log = [];
     this.state.rain = {
       active: false, remaining: 0, intensity: 0,
@@ -138,6 +165,12 @@ export class GameEngine {
       tickAccum: 0,
     };
     this.baseSpeedMap.clear();
+    this.baseVisionMap.clear();
+
+    // 패시브 상태 초기화
+    for (const e of entities) {
+      initPassiveState(e);
+    }
 
     // 길찾기/벽 캐시 구축
     this.nav = new NavGrid(this.config.pathAlgorithm, this.config.navScale);
@@ -164,13 +197,12 @@ export class GameEngine {
     this.state.time += dt;
     this.state.tickAccum += dt;
 
-    // 팀별 전장의 안개 갱신 (엔티티 visionRange 반영)
+    // 팀별 전장의 안개 갱신 (엔티티별 visionRange 반영 — blind 시 개별 시야 축소)
     if (this.fogA && this.fogB) {
       const aliveA = this.state.entities.filter(e => e.team === 'A' && !e.dead);
       const aliveB = this.state.entities.filter(e => e.team === 'B' && !e.dead);
-      // 각 엔티티의 visionRange 중 최대값을 팀 시야로 사용 (성능 상 한 번만 계산)
-      this.fogA.update(aliveA.map(e => ({ x: e.x, y: e.y })));
-      this.fogB.update(aliveB.map(e => ({ x: e.x, y: e.y })));
+      this.fogA.update(aliveA.map(e => ({ x: e.x, y: e.y, visionRange: e.visionRange })));
+      this.fogB.update(aliveB.map(e => ({ x: e.x, y: e.y, visionRange: e.visionRange })));
     }
 
     this.updateRain(dt);
@@ -241,6 +273,8 @@ export class GameEngine {
           continue; // 후딜 중 다른 행동 불가
         }
       }
+      // 패시브 틱 (이동/전투 전에 상태 갱신)
+      tickPassives(e, dt, this.passiveCb);
       this.updateEntity(e, dt);
       updateBuffs(e, dt);
     }
@@ -254,6 +288,10 @@ export class GameEngine {
 
     this.updateProjectiles(dt);
     this.updateTelegraphs(dt);
+    this.updateSynergyZones(dt);
+    this.updateTraps(dt);
+    this.updateSummons(dt);
+    this.updateTemporaryWalls(dt);
     this.checkWin();
 
     // 누적 이동 거리 추적
@@ -355,9 +393,13 @@ export class GameEngine {
         if (bv.hpRegen > 0) {
           e.hp = Math.min(e.maxHp, e.hp + e.maxHp * bv.hpRegen * dt);
         }
-        // CC 저항 (Earth) — stunTimer 감소 가속
-        if (bv.ccResist > 0 && e.stunTimer > 0) {
-          e.stunTimer -= e.stunTimer * bv.ccResist * dt;
+        // CC 저항 (Earth) — 모든 CC 타이머 감소 가속
+        if (bv.ccResist > 0) {
+          if (e.stunTimer > 0) e.stunTimer -= e.stunTimer * bv.ccResist * dt;
+          if (e.shockTimer > 0) e.shockTimer -= e.shockTimer * bv.ccResist * dt;
+          if (e.blindTimer > 0) e.blindTimer -= e.blindTimer * bv.ccResist * dt;
+          if (e.freezeTimer > 0) e.freezeTimer -= e.freezeTimer * bv.ccResist * dt;
+          if (e.rootTimer > 0) e.rootTimer -= e.rootTimer * bv.ccResist * dt;
         }
       }
       if (e.elemDebuff > 0) {
@@ -732,6 +774,8 @@ export class GameEngine {
       killer.kills++;
       this.chargeUlt(killer, ULT_CHARGE.kill);
       this.triggerKillUniqueEffect(killer);
+      // 패시브: 킬 트리거 (루미나 암살자의 혈기)
+      onPassiveKill(killer);
     }
     // 어시스트: 같은 팀이 5초 내 대미지 준 적이 죽으면 충전
     for (const ally of this.state.entities) {
@@ -739,6 +783,8 @@ export class GameEngine {
       if (ally.team === killer?.team) {
         ally.assists++;
         this.chargeUlt(ally, ULT_CHARGE.assist);
+        // 패시브: 어시스트도 킬 트리거 발동 (루미나)
+        onPassiveKill(ally);
       }
     }
     // 사망 패널티
@@ -837,6 +883,9 @@ export class GameEngine {
     e.hp = e.maxHp;
     e.x = e.spawnX; e.y = e.spawnY;
     e.stunTimer = 0; e.burnTimer = 0;
+    e.rootTimer = 0; e.slowRatio = 0; e.slowTimer = 0;
+    e.knockupTimer = 0; e.shockTimer = 0; e.blindTimer = 0; e.freezeTimer = 0;
+    e.dotEffects = [];
     e.dashing = false; e.dashTarget = null;
     e.invincibleTimer = this.config.invincibleTime;
     e.ultCasting = 0;
@@ -846,6 +895,8 @@ export class GameEngine {
     e.elemBuff = 0; e.elemDebuff = 0;
     e.elemChargeTimer = 0; e.elemChargeType = null;
     for (const s of e.skills) s.remaining = Math.min(s.remaining, 2);
+    // 패시브 상태 리셋
+    initPassiveState(e);
     this.log(`${e.name}(${e.team}) 부활!`);
     this.callbacks.onRespawn?.(e);
   }
@@ -896,7 +947,7 @@ export class GameEngine {
 
   /** 궁극기 사용 시작 (캐스팅) */
   useUltimate(e: Entity) {
-    if (!e.ultReady || e.dead || e.stunTimer > 0 || e.ultCasting > 0) return;
+    if (!e.ultReady || e.dead || e.stunTimer > 0 || e.freezeTimer > 0 || e.ultCasting > 0) return;
     const ult = ULTIMATES[e.name];
     if (!ult) return;
     e.ultCasting = ult.castTime;
@@ -994,14 +1045,73 @@ export class GameEngine {
     // 샌드박스 더미: HP 즉시 회복 + 스턴/화상 무시 + 이동 안 함
     if ((e as any).sandboxDummy) {
       e.hp = e.maxHp;
-      e.stunTimer = 0;
-      e.burnTimer = 0;
+      e.stunTimer = 0; e.burnTimer = 0;
+      e.shockTimer = 0; e.blindTimer = 0; e.freezeTimer = 0;
       e.vx = 0; e.vy = 0;
       return;
     }
-    e.speed = this.getBaseSpeed(e) * getSpeedMultiplier(e);
+    e.speed = this.getBaseSpeed(e) * getSpeedMultiplier(e)
+      * getPassiveSpeedMult(e, this.passiveCb)
+      * getAerisWindSpeedMult(e, this.state.entities)
+      * getTideWaterSpeedMult(e, this.state.field, this.config.fieldW, this.config.fieldH, this.state.entities);
     if (e.invincibleTimer > 0) e.invincibleTimer -= dt;
     if (e.stunTimer > 0) { e.stunTimer -= dt; e.vx = 0; e.vy = 0; return; }
+    // 빙결: 완전 행동불가 + 피해감소30% (해빙 시 1초 슬로우)
+    if (e.freezeTimer > 0) {
+      e.freezeTimer -= dt;
+      e.vx = 0; e.vy = 0;
+      if (e.freezeTimer <= 0) {
+        // 해빙 시 슬로우 부여
+        e.slowRatio = Math.max(e.slowRatio, 0.4);
+        e.slowTimer = Math.max(e.slowTimer, 1.0);
+      }
+      return;
+    }
+    // 넉업: 공중 → 모든 행동 불가 (스턴과 유사하지만 피격뎀 20%↑)
+    if (e.knockupTimer > 0) { e.knockupTimer -= dt; e.vx = 0; e.vy = 0; return; }
+    // 속박: 이동 불가, 스킬/공격은 가능
+    if (e.rootTimer > 0) { e.rootTimer -= dt; e.vx = 0; e.vy = 0; }
+    // 감전: 주기적 미니스턴(0.3초 간격으로 0.15초 스턴) + 이속30%감소 + 초당5 DoT
+    if (e.shockTimer > 0) {
+      e.shockTimer -= dt;
+      e.speed *= 0.7;
+      // 소량 DoT (초당 5뎀)
+      const shockDmg = 5 * dt;
+      e.hp -= shockDmg;
+      e.damageTaken += shockDmg;
+      // 주기적 미니스턴 (0.3초마다)
+      const shockPhase = e.shockTimer % 0.3;
+      if (shockPhase < dt) {
+        e.stunTimer = Math.max(e.stunTimer, 0.15);
+      }
+      if (e.shockTimer <= 0) e.shockTimer = 0;
+      if (e.hp <= 0) { this.killEntity(e, '⚡감전'); return; }
+    }
+    // 시야차단: 시야범위 60% 축소 + 공격 35% 빗나감
+    if (!this.baseVisionMap.has(e.id)) this.baseVisionMap.set(e.id, e.visionRange);
+    e.visionRange = this.baseVisionMap.get(e.id)!;
+    if (e.blindTimer > 0) {
+      e.blindTimer -= dt;
+      e.visionRange *= 0.4;
+      if (e.blindTimer <= 0) e.blindTimer = 0;
+    }
+    // 슬로우: 이속 감소
+    if (e.slowTimer > 0) {
+      e.slowTimer -= dt;
+      e.speed *= (1 - e.slowRatio);
+      if (e.slowTimer <= 0) { e.slowRatio = 0; }
+    }
+    // DoT 처리
+    if (e.dotEffects.length > 0) {
+      for (let i = e.dotEffects.length - 1; i >= 0; i--) {
+        const dot = e.dotEffects[i];
+        dot.remaining -= dt;
+        e.hp -= dot.damage * dt;
+        e.damageTaken += dot.damage * dt;
+        if (dot.remaining <= 0) e.dotEffects.splice(i, 1);
+      }
+      if (e.hp <= 0) { this.killEntity(e, 'DoT'); return; }
+    }
     e.attackCooldown = Math.max(0, e.attackCooldown - dt);
     for (const s of e.skills) s.remaining = Math.max(0, s.remaining - dt);
 
@@ -1242,12 +1352,19 @@ export class GameEngine {
               }
             }
           } else {
-            const projDmg = Math.round(p.damage * getDefenseMultiplier(e));
+            const projDmg = Math.round(p.damage * getDefenseMultiplier(e) * getPassiveDefenseMult(e)
+              * (e.knockupTimer > 0 ? 1.2 : 1));
             e.hp -= projDmg;
             p.owner.damageDealt += projDmg;
             e.damageTaken += projDmg;
             if (p.stunDuration > 0) e.stunTimer = Math.max(e.stunTimer, p.stunDuration);
             this.callbacks.onDamage?.(e, projDmg, e.x, e.y);
+            // 패시브: 스킬 적중 (볼트 과충전 스택)
+            onPassiveSkillHit(p.owner);
+            // 패시브: 피격 반응 (가시 반사 — 투사체는 isMelee=false)
+            onPassiveHitTaken(e, p.owner, false, this.passiveCb);
+            // 패시브: 은신 해제 (피격 시)
+            breakStealth(e);
             if (e.hp <= 0) this.killEntity(e, p.skillName);
           }
           { const ph = worldToHex(p.x, p.y); if (p.fieldEffect) this.applyFieldEffect(p.fieldEffect, ph.col, ph.row, p.aoe || 2, p.owner); }
@@ -1311,28 +1428,46 @@ export class GameEngine {
       e.attackCooldown = 1 / e.attackSpeed;
       e.facingAngle = Math.atan2(target.y - e.y, target.x - e.x);
 
+      // 은신 해제 (공격 시)
+      breakStealth(e);
+
       if (e.attackRange <= 3) {
         const attackAngle = Math.PI * 0.8;
         const aDiff = angleDiffAbs(e.facingAngle, Math.atan2(target.y - e.y, target.x - e.x));
         if (aDiff <= attackAngle / 2 && dist <= e.attackRange) {
-          let dmg = Math.round(e.attackDamage * getDamageMultiplier(e) * this.getElementDamageMult(e));
+          let dmg = Math.round(e.attackDamage * getDamageMultiplier(e) * this.getElementDamageMult(e)
+            * getPassiveDamageMult(e, target)
+            * getWetTargetDamageMult(e, target, this.state.field, this.config.fieldW, this.config.fieldH));
           // 후방 타격 보너스: 고속 근접(암살자)가 적의 등 뒤(후방 90도)에서 공격 시 1.5배
           if (e.speed >= 5.5) {
             const attackerAngle = Math.atan2(e.y - target.y, e.x - target.x);
             const behindDiff = angleDiffAbs(target.facingAngle, attackerAngle);
             if (behindDiff > Math.PI * 0.75) dmg = Math.round(dmg * 1.5);
           }
-          dmg = Math.round(dmg * getDefenseMultiplier(target) * this.getElementDefenseMult(target));
+          // 패시브: 백스탭 (루미나 그림자 접근)
+          const backstab = getPassiveBackstab(e, target);
+          dmg = Math.round(dmg * backstab.damageMult);
+          dmg = Math.round(dmg * getDefenseMultiplier(target) * this.getElementDefenseMult(target)
+            * getPassiveDefenseMult(target)
+            * (target.knockupTimer > 0 ? 1.2 : 1));  // 넉업 중 피격 20%↑
           target.hp -= dmg;
           e.damageDealt += dmg;
           target.damageTaken += dmg;
+          if (backstab.extraStun > 0) target.stunTimer = Math.max(target.stunTimer, backstab.extraStun);
           this.callbacks.onMeleeHit?.(e, target, e.facingAngle);
           this.callbacks.onDamage?.(target, dmg, target.x, target.y);
+          // 패시브: 피격 반응 (가시 반사, 벌통)
+          onPassiveHitTaken(target, e, true, this.passiveCb);
           if (target.hp <= 0) this.killEntity(target, `${e.name} 일반공격`);
         } else {
           this.callbacks.onMeleeMiss?.(e);
         }
       } else {
+        // 원거리 기본공격: 체인 라이트닝 체크 (볼트 과충전)
+        const chainDmg = e.attackDamage;
+        if (executeChainAttack(e, target, chainDmg, this.passiveCb)) {
+          // 체인 라이트닝 발동 시에도 기본 투사체는 발사
+        }
         this.spawnProjectile(e, target, e.attackDamage, 15, 'loose', 0, 0, e.name, e.team === 'A' ? '#88ff88' : '#ff8888');
       }
     }
@@ -1364,7 +1499,12 @@ export class GameEngine {
     }
     // 선딜/후딜 중에는 스킬 사용 불가
     if (user.skillCasting > 0 || user.skillRecovery > 0) return;
-    skill.remaining = skill.cooldown;
+    // 은신 해제 (스킬 사용 시)
+    breakStealth(user);
+    // 에리스: 바람 방향 갱신
+    onPassiveSkillUse(user, target.x, target.y);
+    // 패시브 쿨감 적용 (타이드 water 위)
+    skill.remaining = skill.cooldown * getPassiveCooldownMult(user);
 
     // 선딜이 있으면 캐스팅 상태로 전환
     if (skill.windupTime && skill.windupTime > 0) {
@@ -1391,8 +1531,10 @@ export class GameEngine {
     };
     const col = skillColors[skill.type] || '#ffffff';
 
-    // 지형 강화된 데미지/힐
-    const boostedDmg = Math.round(skill.damage * terrainBoost * this.getElementDamageMult(user));
+    // 지형 강화된 데미지/힐 (+ 패시브 배율)
+    const passiveDmgMult = getPassiveDamageMult(user, target)
+      * getWetTargetDamageMult(user, target, this.state.field, this.config.fieldW, this.config.fieldH);
+    const boostedDmg = Math.round(skill.damage * terrainBoost * this.getElementDamageMult(user) * passiveDmgMult);
     const boostedStun = skill.stunDuration * (terrainBoost > 1 ? 1.3 : 1);
     const boostLabel = terrainBoost > 1 ? ' ⬆' : '';
 
@@ -1433,6 +1575,9 @@ export class GameEngine {
         target.hp = Math.min(target.maxHp, target.hp + heal);
         user.healingDone += actualHeal;
         this.callbacks.onHeal?.(target, heal, target.x, target.y);
+        // 패시브: 그로브 생명의 순환 (힐 시 grow 생성 + 추가 힐)
+        const bonusHeal = onPassiveHeal(user, target, heal, this.passiveCb);
+        if (bonusHeal > 0) user.healingDone += bonusHeal;
         // 버프 효과가 있으면 같이 부여 (보호 바람 등)
         if (skill.buffEffects) {
           const fx = skill.buffEffects;
@@ -1472,16 +1617,178 @@ export class GameEngine {
       return;
     }
 
-    if (boostedDmg > 0 && !target.dead) {
-      const finalDmg = Math.round(boostedDmg * getDefenseMultiplier(target) * this.getElementDefenseMult(target));
+    // ── 텔레포트 (루미나 그림자 도약) ──
+    if (skill.type === 'mobility' && skill.teleport) {
+      const dx = target.x - user.x, dy = target.y - user.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const maxRange = skill.range;
+      const tpDist = Math.min(d, maxRange);
+      if (d > 0.1) {
+        const newX = user.x + (dx / d) * tpDist;
+        const newY = user.y + (dy / d) * tpDist;
+        // 벽 안이 아니면 텔레포트
+        if (!this.nav.isWallAtHex(newX, newY)) {
+          user.x = newX;
+          user.y = newY;
+          user.facingAngle = Math.atan2(dy, dx);
+        }
+      }
+      // 은신 효과
+      if (skill.teleport.stealthDuration && user.passiveState) {
+        user.passiveState.stealthActive = true;
+        user.passiveState.stealthDamageMult = user.passives.find(p => p.trigger.type === 'backstab')?.effects.damageMult ?? 1;
+      }
+      this.callbacks.onSkillUse?.(user, skill.name, skill.type, skill.vfx);
+      this.log(`${user.name} [${skill.name}]!`);
+      return;
+    }
+
+    // ── 트랩 설치 (쏜 가시 덫) ──
+    if (skill.type === 'trap' && skill.trap) {
+      const { count, lifetime, hidden } = skill.trap;
+      const trapDmg = skill.damage;
+      const trapSlow = skill.slow;
+      const fieldEff = skill.fieldEffect;
+      // 대상 위치 주변에 덫 배치
+      const angles = count <= 1 ? [0] : Array.from({ length: count }, (_, i) => (i / count) * Math.PI * 2);
+      for (const angle of angles) {
+        const r = count <= 1 ? 0 : 1.2;
+        const tx = target.x + Math.cos(angle) * r;
+        const ty = target.y + Math.sin(angle) * r;
+        this.state.traps.push({
+          x: tx, y: ty,
+          owner: user,
+          damage: trapDmg,
+          slow: trapSlow,
+          lifetime,
+          hidden: !!hidden,
+          fieldEffect: fieldEff,
+          skillName: skill.name,
+        });
+      }
+      if (fieldEff) {
+        const sh = worldToHex(target.x, target.y);
+        this.applyFieldEffect(fieldEff, sh.col, sh.row, skill.aoe || 2, user);
+      }
+      this.callbacks.onSkillUse?.(user, skill.name, skill.type, skill.vfx);
+      this.log(`${user.name} [${skill.name}] 설치!`);
+      return;
+    }
+
+    // ── 소환물 / 빙벽 (프로스트) ──
+    if (skill.summon) {
+      const dx = target.x - user.x, dy = target.y - user.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      const maxRange = skill.range;
+      const dist = Math.min(d, maxRange);
+      const sx = d > 0.1 ? user.x + (dx / d) * dist : target.x;
+      const sy = d > 0.1 ? user.y + (dy / d) * dist : target.y;
+      this.state.summons.push({
+        x: sx, y: sy,
+        owner: user,
+        hp: skill.summon.hp,
+        maxHp: skill.summon.hp,
+        duration: skill.summon.duration,
+        blocksMovement: skill.summon.blocksMovement,
+        skillName: skill.name,
+      });
+      // 빙벽이 이동 차단하면 nav 리빌드 필요 → 간이 벽 추가
+      if (skill.summon.blocksMovement) {
+        this.state.walls.push({ x: Math.floor(sx), y: Math.floor(sy), w: 1, h: 1, temporary: true, lifetime: skill.summon.duration });
+        this.nav.build(this.state.walls, this.config.fieldW, this.config.fieldH);
+      }
+      if (skill.fieldEffect) {
+        const sh = worldToHex(sx, sy);
+        this.applyFieldEffect(skill.fieldEffect, sh.col, sh.row, skill.aoe || 2, user);
+      }
+      this.callbacks.onSkillUse?.(user, skill.name, skill.type, skill.vfx);
+      this.log(`${user.name} [${skill.name}] 소환!`);
+      return;
+    }
+
+    // ── consumeField (블레이즈 화염 선회: 주변 ignite 소비 → 데미지 증폭) ──
+    let consumeBonus = 0;
+    if (skill.consumeField) {
+      const cf = skill.consumeField;
+      const hex = worldToHex(user.x, user.y);
+      const radius = Math.ceil((skill.aoe || 2) * 0.5);
+      const hexes = hexesInRange(hex.col, hex.row, radius, this.config.fieldW, this.config.fieldH);
+      for (const h of hexes) {
+        const cell = this.state.field[h.row][h.col];
+        if (!cell.material) continue;
+        let matches = false;
+        if (cf.fieldEffect === 'ignite' && (cell.material.thermalState === 'burning' || cell.material.thermalState === 'molten')) matches = true;
+        if (cf.fieldEffect === 'freeze' && cell.material.thermalState === 'frozen') matches = true;
+        if (cf.fieldEffect === 'water' && cell.material.type === 'water') matches = true;
+        if (cf.fieldEffect === 'grow' && cell.material.type === 'wood') matches = true;
+        if (cf.fieldEffect === 'mud' && cell.material.thermalState === 'damp') matches = true;
+        if (matches) {
+          consumeBonus += cf.bonusDamage;
+          // 소비: 타일 초기화
+          cell.material = null;
+        }
+      }
+    }
+
+    // 시야차단: 공격 35% 빗나감 (데미지+CC 전부 스킵)
+    const blindMiss = user.blindTimer > 0 && Math.random() < 0.35;
+
+    if (!blindMiss && boostedDmg > 0 && !target.dead) {
+      const totalDmg = boostedDmg + consumeBonus;
+      const finalDmg = Math.round(totalDmg * getDefenseMultiplier(target) * this.getElementDefenseMult(target)
+        * getPassiveDefenseMult(target)
+        * (target.knockupTimer > 0 ? 1.2 : 1)   // 넉업 중 피격 20%↑
+        * (target.freezeTimer > 0 ? 0.7 : 1));   // 빙결 중 피해 30% 감소
       target.hp -= finalDmg;
       user.damageDealt += finalDmg;
       target.damageTaken += finalDmg;
       this.callbacks.onDamage?.(target, finalDmg, target.x, target.y);
+      // 패시브: 스킬 적중 (볼트 과충전 스택)
+      onPassiveSkillHit(user);
+      // 패시브: 피격 반응 (가시 반사, 벌통)
+      onPassiveHitTaken(target, user, skill.range <= 3, this.passiveCb);
       if (target.hp <= 0) this.killEntity(target, skill.name);
     }
-    if (boostedStun > 0 && !target.dead) {
-      target.stunTimer = Math.max(target.stunTimer, boostedStun);
+    if (!blindMiss) {
+      if (boostedStun > 0 && !target.dead) {
+        target.stunTimer = Math.max(target.stunTimer, boostedStun);
+      }
+      // ── 추가 CC 적용 ──
+      if (!target.dead) {
+        // DoT
+        if (skill.dot) {
+          target.dotEffects.push({
+            damage: skill.dot.damage,
+            remaining: skill.dot.duration,
+            source: skill.name,
+          });
+        }
+        // 슬로우
+        if (skill.slow) {
+          target.slowRatio = Math.max(target.slowRatio, skill.slow.ratio);
+          target.slowTimer = Math.max(target.slowTimer, skill.slow.duration);
+        }
+        // 속박 (이동불가, 스킬가능)
+        if (skill.root) {
+          target.rootTimer = Math.max(target.rootTimer, skill.root);
+        }
+        // 넉업 (공중, 모든 행동 불가)
+        if (skill.knockup) {
+          target.knockupTimer = Math.max(target.knockupTimer, skill.knockup);
+        }
+        // 감전 (주기적 미니스턴 + 이속감소 + DoT)
+        if (skill.shock) {
+          target.shockTimer = Math.max(target.shockTimer, skill.shock);
+        }
+        // 시야차단 (시야축소 + 공격빗나감)
+        if (skill.blind) {
+          target.blindTimer = Math.max(target.blindTimer, skill.blind);
+        }
+        // 빙결 (행동불가 + 피해감소30%)
+        if (skill.freeze) {
+          target.freezeTimer = Math.max(target.freezeTimer, skill.freeze);
+        }
+      }
     }
     { const sh = worldToHex(target.x, target.y); if (skill.fieldEffect) this.applyFieldEffect(skill.fieldEffect, sh.col, sh.row, skill.aoe || 2, user); }
     this.callbacks.onSkillUse?.(user, skill.name, skill.type, skill.vfx);
@@ -1505,9 +1812,341 @@ export class GameEngine {
     });
   }
 
+  // ─── 연계 반응 고유 효과 적용 ───
+
+  private applySynergyEffect(combo: ComboResult, owner?: Entity) {
+    const ownerTeam = owner?.team ?? null;
+
+    // 필드 생성 (fog, ice, lava, swamp, pollen)
+    if (combo.fieldCreate) {
+      this.state.synergyZones.push({
+        type: combo.fieldCreate as any,
+        x: combo.cx, y: combo.cy,
+        radius: combo.radius,
+        duration: combo.fieldCreateDuration ?? 4,
+        ownerTeam,
+        stayTimers: combo.swampSink ? new Map() : undefined,
+      });
+    }
+
+    // ③산불: 인접 grow 타일 연쇄 점화
+    if (combo.spreadFire) {
+      const visited = new Set<string>();
+      const queue = [{ col: combo.cx, row: combo.cy }];
+      let count = 0;
+      while (queue.length > 0 && count < 5) {
+        const cur = queue.shift()!;
+        const key = `${cur.col},${cur.row}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        if (cur.row < 0 || cur.row >= this.config.fieldH || cur.col < 0 || cur.col >= this.config.fieldW) continue;
+        const cell = this.state.field[cur.row][cur.col];
+        if (cell.material && cell.material.type === 'wood' && cell.material.thermalState === 'normal') {
+          cell.material.temperature = 350;
+          count++;
+          // 인접 hex 큐에 추가
+          const neighbors = hexNeighborsBounded(cur.col, cur.row, this.config.fieldW, this.config.fieldH);
+          for (const n of neighbors) queue.push(n);
+        }
+      }
+    }
+
+    // ⑤감전확산: 연결된 물 타일 전체에 전기 (물 소멸)
+    if (combo.electrocute) {
+      const visited = new Set<string>();
+      const queue = [{ col: combo.cx, row: combo.cy }];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        const key = `${cur.col},${cur.row}`;
+        if (visited.has(key)) continue;
+        visited.add(key);
+        if (cur.row < 0 || cur.row >= this.config.fieldH || cur.col < 0 || cur.col >= this.config.fieldW) continue;
+        const cell = this.state.field[cur.row][cur.col];
+        if (cell.material && cell.material.type === 'water' && cell.material.thermalState !== 'frozen') {
+          cell.material = null; // 물 소멸
+          const neighbors = hexNeighborsBounded(cur.col, cur.row, this.config.fieldW, this.config.fieldH);
+          for (const n of neighbors) queue.push(n);
+        }
+      }
+    }
+
+    // ⑫전기불꽃: 반경 3칸 grow → ignite
+    if (combo.sparkIgnite) {
+      const hexes = hexesInRange(combo.cx, combo.cy, 3, this.config.fieldW, this.config.fieldH);
+      for (const h of hexes) {
+        const cell = this.state.field[h.row][h.col];
+        if (cell.material && cell.material.type === 'wood' && cell.material.thermalState === 'normal') {
+          cell.material.temperature = 350;
+        }
+      }
+    }
+
+    // ②화염 토네이도: 이동형 존 생성
+    if (combo.tornado) {
+      const t = combo.tornado;
+      this.state.synergyZones.push({
+        type: 'tornado',
+        x: combo.cx, y: combo.cy,
+        radius: 1,
+        duration: t.duration,
+        ownerTeam,
+        vx: Math.cos(t.angle) * t.speed,
+        vy: Math.sin(t.angle) * t.speed,
+      });
+    }
+
+    // ⑩블리자드: 바람 방향 확산 존
+    if (combo.blizzard) {
+      const b = combo.blizzard;
+      this.state.synergyZones.push({
+        type: 'blizzard',
+        x: combo.cx, y: combo.cy,
+        radius: 3,
+        duration: 4,
+        ownerTeam,
+        vx: Math.cos(b.angle) * 1.5,
+        vy: Math.sin(b.angle) * 1.5,
+      });
+    }
+
+    // ⑧급성장 벽: 임시 벽 생성
+    if (combo.createWall) {
+      const cw = combo.createWall;
+      this.state.summons.push({
+        x: combo.cx, y: combo.cy,
+        owner: owner ?? this.state.entities[0],
+        hp: cw.hp, maxHp: cw.hp,
+        duration: cw.duration,
+        blocksMovement: true,
+        skillName: '급성장 벽',
+      });
+      this.state.walls.push({
+        x: Math.floor(combo.cx), y: Math.floor(combo.cy),
+        temporary: true, lifetime: cw.duration,
+      });
+      this.nav.build(this.state.walls, this.config.fieldW, this.config.fieldH);
+    }
+  }
+
+  // ─── 연계 존 업데이트 ───
+
+  private updateSynergyZones(dt: number) {
+    for (let i = this.state.synergyZones.length - 1; i >= 0; i--) {
+      const z = this.state.synergyZones[i];
+      z.duration -= dt;
+      if (z.duration <= 0) {
+        this.state.synergyZones.splice(i, 1);
+        continue;
+      }
+
+      // 이동형 존 (토네이도, 블리자드)
+      if (z.vx || z.vy) {
+        z.x += (z.vx ?? 0) * dt;
+        z.y += (z.vy ?? 0) * dt;
+        // 맵 경계 클램프
+        z.x = Math.max(0, Math.min(this.config.fieldW - 1, z.x));
+        z.y = Math.max(0, Math.min(this.config.fieldH - 1, z.y));
+      }
+
+      // 존 효과를 밟고 있는 엔티티에 적용
+      for (const e of this.state.entities) {
+        if (e.dead) continue;
+        const dx = e.x - z.x, dy = e.y - z.y;
+        if (dx * dx + dy * dy > (z.radius + 0.5) ** 2) {
+          // 범위 밖이면 수렁 체류 리셋
+          z.stayTimers?.delete(e.id);
+          continue;
+        }
+
+        switch (z.type) {
+          case 'fog':
+            // fog 안에서 적: 시야차단 + 공격 쿨다운 증가
+            if (z.ownerTeam && e.team !== z.ownerTeam) {
+              e.blindTimer = Math.max(e.blindTimer, dt * 2); // fog에 있는 동안 blind 유지
+              e.attackCooldown = Math.max(e.attackCooldown, 0.3);
+            }
+            break;
+
+          case 'ice':
+            // 관성 미끄러짐: 방향 전환 시 추가 활주
+            if (Math.abs(e.vx) > 0.5 || Math.abs(e.vy) > 0.5) {
+              // 이속 약간 증가 (미끄러짐)
+              e.speed *= 1.15;
+              // 대시 중이면 제어 불가 (볼링 패시브와 유사)
+              if (e.dashing) {
+                e.dashSpeed *= 2;
+              }
+            }
+            break;
+
+          case 'lava':
+            // 초당 25 데미지 (최강 장판)
+            if (z.ownerTeam === null || e.team !== z.ownerTeam) {
+              const lavaDmg = 25 * dt;
+              e.hp -= lavaDmg;
+              e.damageTaken += lavaDmg;
+              if (e.hp <= 0) this.killEntity(e, '🌋용암');
+            }
+            break;
+
+          case 'swamp':
+            // 이속 70% 감소 + 대시 불가
+            e.speed *= 0.3;
+            if (e.dashing) {
+              e.dashing = false;
+              e.dashTarget = null;
+              e.vx = 0; e.vy = 0;
+            }
+            // 3초 체류 시 스턴
+            if (z.stayTimers) {
+              const stay = (z.stayTimers.get(e.id) ?? 0) + dt;
+              z.stayTimers.set(e.id, stay);
+              if (stay >= 3) {
+                e.stunTimer = Math.max(e.stunTimer, 1.5);
+                z.stayTimers.set(e.id, 0); // 리셋
+              }
+            }
+            break;
+
+          case 'pollen':
+            // 0.8초마다 재채기 미니스턴 (랜덤), 적아군 무관
+            if (Math.random() < dt / 0.8) {
+              e.stunTimer = Math.max(e.stunTimer, 0.3);
+              // 은신 해제
+              if (e.passiveState?.stealthActive) {
+                e.passiveState.stealthActive = false;
+                e.passiveState.stationaryTimer = 0;
+                e.passiveState.stealthDamageMult = 1;
+                e.passiveState.stealthCooldown = 6;
+              }
+            }
+            break;
+
+          case 'tornado':
+            // 접촉 시 20뎀 + 화상
+            if (z.ownerTeam === null || e.team !== z.ownerTeam) {
+              const tdmg = 20 * dt;
+              e.hp -= tdmg;
+              e.burnTimer = Math.max(e.burnTimer, 2);
+              if (e.hp <= 0) this.killEntity(e, '🌪️🔥화염 토네이도');
+            }
+            // 지나간 타일에 ignite
+            {
+              const hex = worldToHex(z.x, z.y);
+              if (hex.row >= 0 && hex.row < this.config.fieldH && hex.col >= 0 && hex.col < this.config.fieldW) {
+                const cell = this.state.field[hex.row][hex.col];
+                if (cell.material && cell.material.type === 'wood') {
+                  cell.material.temperature = Math.max(cell.material.temperature, 350);
+                }
+              }
+            }
+            break;
+
+          case 'blizzard':
+            // 시야 축소 + 이속 30% 감소 + 초당 8뎀
+            e.speed *= 0.7;
+            if (z.ownerTeam === null || e.team !== z.ownerTeam) {
+              const bdmg = 8 * dt;
+              e.hp -= bdmg;
+              if (e.hp <= 0) this.killEntity(e, '❄️🌪️블리자드');
+            }
+            break;
+        }
+      }
+    }
+  }
+
+  // ─── 트랩 업데이트 ───
+
+  private updateTraps(dt: number) {
+    for (let i = this.state.traps.length - 1; i >= 0; i--) {
+      const trap = this.state.traps[i];
+      trap.lifetime -= dt;
+      if (trap.lifetime <= 0) {
+        this.state.traps.splice(i, 1);
+        continue;
+      }
+      // 적이 밟으면 발동
+      for (const e of this.state.entities) {
+        if (e.dead || e.team === trap.owner.team) continue;
+        const dx = e.x - trap.x, dy = e.y - trap.y;
+        if (dx * dx + dy * dy < 1.0) {
+          // 데미지
+          if (trap.damage > 0) {
+            e.hp -= trap.damage;
+            e.damageTaken += trap.damage;
+            trap.owner.damageDealt += trap.damage;
+            this.callbacks.onDamage?.(e, trap.damage, e.x, e.y);
+          }
+          // 슬로우
+          if (trap.slow) {
+            e.slowRatio = Math.max(e.slowRatio, trap.slow.ratio);
+            e.slowTimer = Math.max(e.slowTimer, trap.slow.duration);
+          }
+          if (e.hp <= 0) this.killEntity(e, trap.skillName);
+          // 덫 소비
+          this.state.traps.splice(i, 1);
+          break;
+        }
+      }
+    }
+  }
+
+  // ─── 소환물 업데이트 ───
+
+  private updateSummons(dt: number) {
+    let needRebuild = false;
+    for (let i = this.state.summons.length - 1; i >= 0; i--) {
+      const s = this.state.summons[i];
+      s.duration -= dt;
+      if (s.duration <= 0 || s.hp <= 0) {
+        this.state.summons.splice(i, 1);
+        if (s.blocksMovement) needRebuild = true;
+        continue;
+      }
+      // 적 공격으로 파괴 가능 (근접 범위 내 적이 자동 공격)
+      for (const e of this.state.entities) {
+        if (e.dead || e.team === s.owner.team) continue;
+        const dx = e.x - s.x, dy = e.y - s.y;
+        if (dx * dx + dy * dy < 2.5 && e.attackCooldown <= 0) {
+          s.hp -= e.attackDamage;
+          if (s.hp <= 0) {
+            this.state.summons.splice(i, 1);
+            if (s.blocksMovement) needRebuild = true;
+            break;
+          }
+        }
+      }
+    }
+    if (needRebuild) {
+      // 임시 벽도 정리
+      this.state.walls = this.state.walls.filter(w => !w.temporary || (w.lifetime !== undefined && w.lifetime > 0));
+      this.nav.build(this.state.walls, this.config.fieldW, this.config.fieldH);
+    }
+  }
+
+  // ─── 임시 벽 수명 ───
+
+  private updateTemporaryWalls(dt: number) {
+    let needRebuild = false;
+    for (let i = this.state.walls.length - 1; i >= 0; i--) {
+      const w = this.state.walls[i];
+      if (w.temporary && w.lifetime !== undefined) {
+        w.lifetime -= dt;
+        if (w.lifetime <= 0) {
+          this.state.walls.splice(i, 1);
+          needRebuild = true;
+        }
+      }
+    }
+    if (needRebuild) {
+      this.nav.build(this.state.walls, this.config.fieldW, this.config.fieldH);
+    }
+  }
+
   applyFieldEffect(effect: string, cx: number, cy: number, radius: number, owner?: Entity) {
-    // ─── 콤보 판정 (필드이펙트 적용 전) ───
-    const combo = checkCombo(this.state.field, effect, cx, cy, this.state.time);
+    // ─── 연계 반응 판정 (필드이펙트 적용 전) ───
+    const combo = checkCombo(this.state.field, effect, cx, cy, this.state.time, owner);
     if (combo) {
       const ownerTeam = owner?.team ?? null;
       const affected = applyComboEffect(combo, this.state.entities, ownerTeam);
@@ -1522,10 +2161,14 @@ export class GameEngine {
         }
       }
       this.callbacks.onCombo?.(combo.name, combo.icon, cx, cy, combo.radius, combo.damage < 0);
-      this.callbacks.onLog?.(this.state.time, `${combo.icon} [콤보] ${combo.name}! (${affected.length}명 피격)`);
-      
-      // 콤보 발생 시 강한 시각적 피드백 (화면 흔들림 등 유도)
-      const comboColor = combo.name === '감전' ? '#ffff00' : combo.name === '수증기 폭발' ? '#ffffff' : '#ffcc00';
+      this.callbacks.onLog?.(this.state.time, `${combo.icon} [연계] ${combo.name}! (${affected.length}명 피격)`);
+
+      // ── 연계 고유 효과 처리 ──
+      this.applySynergyEffect(combo, owner);
+
+      const comboColor = combo.fieldCreate === 'fog' ? '#cccccc' : combo.fieldCreate === 'ice' ? '#aaddff'
+        : combo.fieldCreate === 'lava' ? '#ff6600' : combo.fieldCreate === 'swamp' ? '#556633'
+        : combo.fieldCreate === 'pollen' ? '#ffee44' : '#ffcc00';
       this.callbacks.onProjectileHit?.(cx, cy, combo.radius, comboColor);
     }
 

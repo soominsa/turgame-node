@@ -26,6 +26,14 @@ export interface Entity {
   size: number;
   stunTimer: number;
   burnTimer: number;
+  rootTimer: number;           // 속박 (이동불가, 스킬/공격 가능)
+  slowRatio: number;           // 슬로우 비율 (0.5 = 50% 감속)
+  slowTimer: number;           // 슬로우 남은 시간
+  knockupTimer: number;        // 넉업 (공중, 모든 행동 불가, 피격뎀 20%↑)
+  shockTimer: number;          // 감전 (주기적 미니스턴 + 이속감소 + 소량DoT)
+  blindTimer: number;          // 시야차단 (시야축소 + 공격 빗나감)
+  freezeTimer: number;         // 빙결 (행동불가 + 피해감소30%)
+  dotEffects: Array<{ damage: number; remaining: number; source: string }>;  // DoT 효과 목록
   facingAngle: number;
   // 대쉬(돌진) 상태
   dashing: boolean;
@@ -62,9 +70,53 @@ export interface Entity {
   elemDebuff: number;        // 디버프 남은 시간 (0=없음)
   elemChargeTimer: number;   // 충전 중 타이머
   elemChargeType: 'buff' | 'debuff' | null;  // 현재 충전 중인 타입
+  // ── 패시브 런타임 상태 ──
+  passiveState?: PassiveState;
+
   // 룬 시스템 (룬전에서만 존재)
   sigilEffect?: SigilEffect;       // 시길 효과 (매치 시작 시 계산)
   glyphEffects?: GlyphEffect[];    // 글리프 효과 (팀 단위 공유)
+}
+
+/** 패시브 시스템 런타임 상태 (game-engine에서 관리) */
+export interface PassiveState {
+  // 실반: 위장술
+  stealthActive?: boolean;         // 현재 은신 중
+  stationaryTimer?: number;        // 정지 누적 시간
+  stealthCooldown?: number;        // 은신 재발동 쿨
+  stealthDamageMult?: number;      // 기습 데미지 배율
+
+  // 볼트: 과충전
+  skillHitStacks?: number;         // 스킬 적중 누적
+  chainAttackReady?: boolean;      // 체인 라이트닝 준비
+
+  // 루미나: 암살자의 혈기
+  killRushTimer?: number;          // 킬 보상 효과 남은 시간
+
+  // 블레이즈: 불꽃 잔상
+  lastTrailX?: number;
+  lastTrailY?: number;
+
+  // 프로스트: 동토의 영역
+  lastFieldGenTime?: number;       // 마지막 필드 생성 시간
+
+  // 에리스: 순풍/역풍
+  windAngle?: number;              // 바람 방향 (마지막 스킬 방향)
+
+  // 타이드: 조류 지배 (water 위 쿨감)
+  onWaterField?: boolean;          // 현재 water 위에 있는지
+
+  // 쏜: 벌통
+  beeCount?: number;               // 현재 벌 수
+  bees?: Array<{ targetId: string; timer: number; tickAccum: number }>;
+
+  // 바위: 볼링 본능
+  bowlingActive?: boolean;         // 빙판 활주 중
+  bowlingVx?: number;
+  bowlingVy?: number;
+
+  // 그로브: 생명의 순환 (힐 시 grow 타일)
+  // 트리거 시점에서 처리하므로 별도 상태 불필요
 }
 
 export interface Skill {
@@ -90,6 +142,9 @@ export interface Skill {
   slow?: { ratio: number; duration: number };      // 슬로우
   root?: number;               // 속박 지속 (이동불가, 스킬가능)
   knockup?: number;            // 넉업 지속 (공중, 피격뎀 20%↑)
+  shock?: number;              // 감전 지속 (주기적 미니스턴 + 이속감소)
+  blind?: number;              // 시야차단 지속 (시야축소 + 공격빗나감)
+  freeze?: number;             // 빙결 지속 (행동불가 + 피해감소30%)
   // 트랩/설치물
   trap?: { count: number; lifetime: number; hidden?: boolean };
   // 텔레포트/도약

@@ -196,8 +196,8 @@ export class OnlineAdapter {
 
   // ─── 로비 명령 (REST → 게임노드 WS 연결) ───
 
-  async createRoom(playerName: string) {
-    const res = await this.post<TicketResponse>('/api/player/rooms/create', { playerName });
+  async createRoom(playerName: string, matchType?: 'normal' | 'rune') {
+    const res = await this.post<TicketResponse>('/api/player/rooms/create', { playerName, matchType });
     if (res.ok && res.ticket && res.nodeUrl) {
       this.connectToNode(res.ticket, res.nodeUrl);
     } else {
@@ -427,6 +427,7 @@ export class OnlineAdapter {
       passives: [],
       color: ce.color, size: ce.size,
       stunTimer: ce.st, burnTimer: ce.bt,
+      shockTimer: ce.sht ?? 0, blindTimer: ce.blt ?? 0, freezeTimer: ce.fzt ?? 0,
       facingAngle: ce.fa,
       dashing: ce.ds, dashTarget: null,
       dashSpeed: 0, dashDamage: 0, dashStun: 0, dashSkillName: '',
@@ -439,6 +440,7 @@ export class OnlineAdapter {
       skillCasting: 0, skillRecovery: 0, pendingSkill: null,
       buffs: [],
       elemBuff: 0, elemDebuff: 0, elemChargeTimer: 0, elemChargeType: null,
+      rootTimer: 0, slowRatio: 0, slowTimer: 0, knockupTimer: 0, dotEffects: [],
     };
   }
 
@@ -457,6 +459,9 @@ export class OnlineAdapter {
     e.invincibleTimer = ce.it;
     e.stunTimer = ce.st;
     e.burnTimer = ce.bt;
+    e.shockTimer = ce.sht ?? 0;
+    e.blindTimer = ce.blt ?? 0;
+    e.freezeTimer = ce.fzt ?? 0;
     e.dashing = ce.ds;
     e.kills = ce.k; e.deaths = ce.d;
     e.damageDealt = ce.dd; e.healingDone = ce.hd;
@@ -584,6 +589,11 @@ export class OnlineAdapter {
   /** 중앙서버 REST API 호출 (외부 노출) */
   async postApi<T>(path: string, body: any): Promise<T> {
     return this.post<T>(path, body);
+  }
+
+  /** 중앙서버 GET API 호출 */
+  async getApi<T>(path: string): Promise<T> {
+    return this.get<T>(path);
   }
 
   /** 게임노드로 메시지 전송 (게임 조작) */

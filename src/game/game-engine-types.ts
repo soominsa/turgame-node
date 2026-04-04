@@ -29,7 +29,46 @@ export interface CapturePoint {
 
 export interface Wall {
   x: number; y: number;
-  type: 'rock' | 'fence' | 'ruin';
+  type?: 'rock' | 'fence' | 'ruin';
+  w?: number; h?: number;
+  temporary?: boolean;       // 소환물에 의한 임시 벽
+  lifetime?: number;         // 임시 벽 수명 (초)
+}
+
+/** 연계 반응 지속 효과 구역 */
+export interface SynergyZone {
+  type: 'fog' | 'ice' | 'lava' | 'swamp' | 'pollen' | 'tornado' | 'blizzard';
+  x: number; y: number;
+  radius: number;
+  duration: number;          // 남은 수명 (초)
+  ownerTeam: 'A' | 'B' | null;
+  // 이동형 (토네이도, 블리자드)
+  vx?: number; vy?: number;
+  // 수렁 체류 추적 (엔티티ID → 체류 시간)
+  stayTimers?: Map<string, number>;
+}
+
+/** 설치형 덫 (쏜 가시 덫 등) */
+export interface TrapInstance {
+  x: number; y: number;
+  owner: Entity;
+  damage: number;
+  slow?: { ratio: number; duration: number };
+  lifetime: number;          // 남은 수명 (초)
+  hidden: boolean;           // grow 타일 위에서 은폐
+  fieldEffect?: string;
+  skillName: string;
+}
+
+/** 소환물 (프로스트 빙벽 등) */
+export interface SummonInstance {
+  x: number; y: number;
+  owner: Entity;
+  hp: number;
+  maxHp: number;
+  duration: number;          // 남은 수명 (초)
+  blocksMovement: boolean;
+  skillName: string;
 }
 
 export interface Projectile {
@@ -112,6 +151,10 @@ export interface GameState {
   winner: string | null;
   projectiles: Projectile[];
   telegraphs: AOETelegraph[];
+  traps: TrapInstance[];
+  summons: SummonInstance[];
+  /** 연계 반응 지속 효과 (토네이도, 블리자드, fog, lava 등) */
+  synergyZones: SynergyZone[];
   log: string[];
   selectedEntityIdx: number;
   rain: RainEvent;

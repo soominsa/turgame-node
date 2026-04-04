@@ -36,8 +36,8 @@ export class FogOfWar {
     this.explored = new Uint8Array(total);  // 0 = never seen
   }
 
-  /** 매 프레임 호출. 아군 엔티티 위치 배열로 시야 갱신. */
-  update(allyPositions: ReadonlyArray<{ x: number; y: number }>) {
+  /** 매 프레임 호출. 아군 엔티티 위치+개별 시야 범위로 시야 갱신. */
+  update(allyPositions: ReadonlyArray<{ x: number; y: number; visionRange?: number }>) {
     const { fieldW, fieldH, sightRange, tiles, explored } = this;
     const total = fieldW * fieldH;
 
@@ -52,15 +52,17 @@ export class FogOfWar {
     for (const pos of allyPositions) {
       const hex = worldToHex(pos.x, pos.y);
       const cr = hex.row, cc = hex.col;
+      // 엔티티별 시야 범위 사용 (없으면 기본 sightRange)
+      const range = pos.visionRange ?? sightRange;
 
       // 시야 범위 내 타일 순회 (hexDistance 기반)
-      const rMin = Math.max(0, cr - sightRange);
-      const rMax = Math.min(fieldH - 1, cr + sightRange);
+      const rMin = Math.max(0, cr - range);
+      const rMax = Math.min(fieldH - 1, cr + range);
       for (let r = rMin; r <= rMax; r++) {
-        const cMin = Math.max(0, cc - sightRange);
-        const cMax = Math.min(fieldW - 1, cc + sightRange);
+        const cMin = Math.max(0, cc - range);
+        const cMax = Math.min(fieldW - 1, cc + range);
         for (let c = cMin; c <= cMax; c++) {
-          if (hexDistance(cc, cr, c, r) <= sightRange) {
+          if (hexDistance(cc, cr, c, r) <= range) {
             const idx = r * fieldW + c;
             tiles[idx] = 2;
             explored[idx] = 1;

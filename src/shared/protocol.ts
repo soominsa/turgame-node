@@ -4,6 +4,8 @@
 
 // ─── 로비 타입 ───
 
+export type MatchType = 'normal' | 'rune';
+
 export interface LobbyPlayer {
   id: string;
   name: string;
@@ -41,6 +43,9 @@ export interface CompactEntity {
   it: number;          // invincibleTimer
   st: number;          // stunTimer
   bt: number;          // burnTimer
+  sht: number;         // shockTimer
+  blt: number;         // blindTimer
+  fzt: number;         // freezeTimer
   ds: boolean;         // dashing
   sr: number[];        // skill remaining cooldowns
   k: number;           // kills
@@ -172,10 +177,8 @@ export interface MatchRewardEntry {
   name: string;
   team: 'A' | 'B';
   role: string;
-  contribution: number;
-  water: number;
-  soil: number;
-  heat: number;
+  seed: number;           // $SEED 보상
+  hashPower: number;      // 해시파워 (F2P 1.0, NFT 1.5)
   blocked: boolean;
   aiDelegationRatio?: number;  // AI 위임 비율 (0~1)
   aiMultiplier?: number;       // AI 위임 보상 배율 (1.0 = 풀, 0.1 = 최소)
