@@ -42,6 +42,7 @@ export interface MatchEndReport {
     activeTicks: number;
     totalTicks: number;
     isHuman: boolean;
+    isNft: boolean;
   }[];
 }
 
@@ -100,6 +101,8 @@ export class GameRoom {
   onEmpty?: () => void;
   /** 매치 종료 콜백 — 중앙서버에 결과 전달 (토큰 지급은 중앙서버만 처리) */
   onMatchEnd?: (report: MatchEndReport) => void;
+  /** NFT 캐릭터 보유 맵 (wallet → Set<characterId>). 외부에서 주입 (B-2 연동) */
+  nftCharacters = new Map<string, Set<string>>();
 
   constructor(id: string) {
     this.id = id;
@@ -319,11 +322,20 @@ export class GameRoom {
     this.matchStartTime = Date.now();
     this.entityExtras.clear();
     const humanIds = new Set(this.players.map(p => p.entityId).filter(Boolean));
+    // 플레이어 entityId → wallet 매핑
+    const entityWalletMap = new Map<string, string>();
+    for (const p of this.players) {
+      if (p.entityId) entityWalletMap.set(p.entityId, p.wallet);
+    }
     for (const e of entities) {
+      const wallet = entityWalletMap.get(e.id);
+      const charId = e.id.split('_')[0]; // 'blaze_A' → 'blaze'
+      const nftSet = wallet ? this.nftCharacters.get(wallet) : undefined;
       this.entityExtras.set(e.id, {
         assists: 0, captures: 0, defends: 0,
         activeTicks: 0, totalTicks: 0,
         isHuman: humanIds.has(e.id),
+        isNft: nftSet?.has(charId) ?? false,
       });
     }
 
@@ -336,7 +348,7 @@ export class GameRoom {
         type: 'game_start',
         yourEntityId: p.entityId!,
         field: serializedField,
-        walls: walls.map(w => ({ x: w.x, y: w.y, type: w.type })),
+        walls: walls.map(w => ({ x: w.x, y: w.y, type: w.type ?? 'rock' })),
         points: points.map(pt => ({
           x: pt.x, y: pt.y, radius: pt.radius,
           owner: pt.owner, progress: pt.progress, capturingTeam: pt.capturingTeam,
@@ -461,7 +473,7 @@ export class GameRoom {
       const matchEntities = this.engine.state.entities.map(e => {
         const ext = this.entityExtras.get(e.id) ?? {
           assists: 0, captures: 0, defends: 0,
-          activeTicks: 0, totalTicks: this.tickCount, isHuman: false,
+          activeTicks: 0, totalTicks: this.tickCount, isHuman: false, isNft: false,
         };
         // 엔진에서 추적한 assists/captures/defends를 extras에 반영
         ext.assists = e.assists;
@@ -470,7 +482,7 @@ export class GameRoom {
         return toMatchEntity(e, ext);
       });
 
-      const rewards = calculateRewards({
+      const { players: rewards, host: hostReward } = calculateRewards({
         winner: this.engine.state.winner as 'A' | 'B',
         scoreA: this.engine.state.scoreA,
         scoreB: this.engine.state.scoreB,
@@ -483,9 +495,7 @@ export class GameRoom {
         const RUNE_REWARD_MULT = 1.15;
         for (const r of rewards) {
           if (!r.blocked) {
-            r.water = Math.round(r.water * RUNE_REWARD_MULT);
-            r.soil  = Math.round(r.soil  * RUNE_REWARD_MULT);
-            r.heat  = Math.round(r.heat  * RUNE_REWARD_MULT);
+            r.seed = Math.round(r.seed * RUNE_REWARD_MULT);
           }
         }
         // 글리프 소멸 (playerRuneData 정리)
@@ -523,6 +533,8 @@ export class GameRoom {
           activeTicks: me.activeTicks,
           totalTicks: me.totalTicks,
           isHuman: me.isHuman,
+          isNft: me.isNft,
+          element: me.element,
         })),
       };
 
@@ -530,11 +542,12 @@ export class GameRoom {
         this.onMatchEnd(report);
       }
 
+      console.log(`  Host: $SEED ${hostReward.seed} (humans=${hostReward.humanCount})`);
       for (const r of rewards) {
         if (!r.blocked) {
           const aiInfo = r.aiDelegationRatio != null && r.aiDelegationRatio > 0
             ? ` AI위임=${(r.aiDelegationRatio * 100).toFixed(0)}%(×${r.aiMultiplier})` : '';
-          console.log(`  ${r.entityName}(${r.team}/${r.role}): contrib=${r.contribution} → W=${r.water} S=${r.soil} H=${r.heat}${aiInfo}`);
+          console.log(`  ${r.entityName}(${r.team}/${r.role}): HP=${r.hashPower} → $SEED ${r.seed}${aiInfo}`);
         } else {
           console.log(`  ${r.entityName}(${r.team}): BLOCKED — ${r.blockReason}`);
         }
@@ -547,7 +560,7 @@ export class GameRoom {
         scoreB: Math.floor(this.engine.state.scoreB),
         rewards: rewards.map(r => ({
           entityId: r.entityId, name: r.entityName, team: r.team, role: r.role,
-          contribution: r.contribution, water: r.water, soil: r.soil, heat: r.heat,
+          seed: r.seed, hashPower: r.hashPower,
           blocked: r.blocked,
           aiDelegationRatio: r.aiDelegationRatio,
           aiMultiplier: r.aiMultiplier,
@@ -577,6 +590,7 @@ export class GameRoom {
       dead: e.dead, rt: round2(e.respawnTimer),
       it: round2(e.invincibleTimer),
       st: round2(e.stunTimer), bt: round2(e.burnTimer),
+      sht: round2(e.shockTimer), blt: round2(e.blindTimer), fzt: round2(e.freezeTimer),
       ds: e.dashing,
       sr: e.skills.map(s => round2(s.remaining)),
       k: e.kills, d: e.deaths,
@@ -602,6 +616,7 @@ export class GameRoom {
       dead: e.dead, rt: round2(e.respawnTimer),
       it: round2(e.invincibleTimer),
       st: round2(e.stunTimer), bt: round2(e.burnTimer),
+      sht: round2(e.shockTimer), blt: round2(e.blindTimer), fzt: round2(e.freezeTimer),
       ds: e.dashing,
       sr: e.skills.map(s => round2(s.remaining)),
       k: e.kills, d: e.deaths,

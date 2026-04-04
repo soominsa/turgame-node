@@ -112,6 +112,10 @@ export class NodeRoomManager {
     if (!room) {
       // 새 방 생성 (create_room 요청 → 중앙서버가 이 노드를 선택 → 첫 플레이어가 도착)
       room = this.createRoom(roomId);
+      // 매칭 타입 반영 (룬전 분리)
+      if (ticket.matchType === 'rune') {
+        room.matchMode = 'runed';
+      }
     }
 
     if (room.phase !== 'lobby') {

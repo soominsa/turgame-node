@@ -89,6 +89,8 @@ export interface MatchPlayerReport {
   activeTicks: number;
   totalTicks: number;
   isHuman: boolean;
+  isNft: boolean;
+  element?: string;   // 캐릭터 원소 (Essence 드랍용)
 }
 
 // ─── 참가 티켓 (중앙 → 플레이어 → 노드) ───
@@ -100,6 +102,7 @@ export interface JoinTicket {
   nickname: string;
   nodeUrl: string;
   roomId: string;
+  matchType?: 'normal' | 'rune';  // 매칭 타입 (룬전 분리)
   expiresAt: number;       // Unix ms
   signature: string;       // HMAC-SHA256
 }
@@ -143,8 +146,8 @@ export interface CreateRoomResponse {
 
 export interface MatchRewardResponse {
   processed: boolean;
-  rewards: { wallet: string; water: number; soil: number; heat: number }[];
-  hostReward?: { water: number; soil: number; heat: number };
+  rewards: { wallet: string; seed: number }[];
+  hostReward?: { seed: number };
 }
 
 // ─── 중앙서버 WS 메시지 (플레이어 ↔ 중앙) ───
