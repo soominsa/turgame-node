@@ -71,8 +71,9 @@ const tide: CharSheet = {
       initialCooldown: 3,
       damage: 12,
       range: 10,
-      stunDuration: 2,
+      stunDuration: 0,
       aoe: 3,
+      freeze: 2.0,            // 빙결 2초 (행동불가 + 피해30%감소)
       windupTime: 0.12,
       recoveryTime: 0,          // telegraph = no recovery
       fieldEffect: 'freeze',

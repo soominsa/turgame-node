@@ -69,10 +69,11 @@ const frost: CharSheet = {
       initialCooldown: 2,
       damage: 18,
       range: 4,
-      stunDuration: 1.5,
+      stunDuration: 0,
       aoe: 5,
       windupTime: 0.2,
       recoveryTime: 0,
+      freeze: 2.0,             // 빙결 2초 (행동불가 + 피해30%감소 + 해빙 슬로우)
       fieldEffect: 'freeze',
       telegraphDelay: 0.3,
       vfx: { cast: 'cm_bluefire', hit: 'cm_freezing', scale: 1.5 },
@@ -103,7 +104,10 @@ const frost: CharSheet = {
     screenColor: 'rgba(136,204,255,0.4)',
     radius: 8,
     damage: 30,
-    stunDuration: 3.0,
+    stunDuration: 1.0,
+    effects: {
+      freeze: 3.0,             // 빙결 3초
+    },
     vfx: { cast: 'cm_freezing', hit: 'cm_bluefire', scale: 2.0 },
   },
 };

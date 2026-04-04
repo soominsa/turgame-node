@@ -110,6 +110,9 @@ export interface SkillSheet {
   slow?: { ratio: number; duration: number };     // 슬로우
   root?: number;            // 속박 지속 (이동불가, 스킬가능)
   knockup?: number;         // 넉업 지속 (공중, 피격뎀 20%↑)
+  shock?: number;           // 감전 지속 (주기적 미니스턴 + 이속감소)
+  blind?: number;           // 시야차단 지속 (시야축소 + 공격빗나감)
+  freeze?: number;          // 빙결 지속 (행동불가 + 피해감소30%)
   // 트랩/설치물
   trap?: { count: number; lifetime: number; hidden?: boolean };
   // 텔레포트/도약
@@ -153,6 +156,9 @@ export interface UltimateSheet {
     enemyDamage?: number;     // 적 피해 (바위 전용)
     enemyStun?: number;       // 적 스턴 (바위 전용)
     distanceDecay?: boolean;  // 거리 감쇠 여부
+    shock?: number;            // 감전 지속
+    blind?: number;            // 시야차단 지속
+    freeze?: number;           // 빙결 지속
   };
   // 궁극기 VFX (미설정 시 기본 폭발 이펙트)
   vfx?: SkillVfx;

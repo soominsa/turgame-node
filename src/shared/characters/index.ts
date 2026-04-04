@@ -65,6 +65,9 @@ function skillFromSheet(s: SkillSheet): Skill {
     slow: s.slow,
     root: s.root,
     knockup: s.knockup,
+    shock: s.shock,
+    blind: s.blind,
+    freeze: s.freeze,
     trap: s.trap,
     teleport: s.teleport,
     summon: s.summon,
@@ -93,6 +96,14 @@ export function createEntity(sheet: CharSheet, team: 'A' | 'B', x: number, y: nu
     size: sheet.size,
     stunTimer: 0,
     burnTimer: 0,
+    rootTimer: 0,
+    slowRatio: 0,
+    slowTimer: 0,
+    knockupTimer: 0,
+    shockTimer: 0,
+    blindTimer: 0,
+    freezeTimer: 0,
+    dotEffects: [],
     facingAngle: 0,
     dashing: false,
     dashTarget: null,
@@ -255,6 +266,9 @@ function buildUltExecute(sheet: CharSheet): (user: Entity, entities: Entity[]) =
         }
 
         if (fx.burn) e.burnTimer = Math.max(e.burnTimer, fx.burn);
+        if (fx.shock) e.shockTimer = Math.max(e.shockTimer, fx.shock);
+        if (fx.blind) e.blindTimer = Math.max(e.blindTimer, fx.blind);
+        if (fx.freeze) e.freezeTimer = Math.max(e.freezeTimer, fx.freeze);
         if (fx.pull && d > 1) {
           const pull = Math.min(d - 1, fx.pull);
           const dx = user.x - e.x, dy = user.y - e.y;

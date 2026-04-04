@@ -78,11 +78,12 @@ const volt: CharSheet = {
       initialCooldown: 3,
       damage: 28,
       range: 7,
-      stunDuration: 1.5,
+      stunDuration: 0.5,
       aoe: 3,
       windupTime: 0.2,
       recoveryTime: 0,
       telegraphDelay: 0.5,
+      shock: 2.5,              // 감전 2.5초 (주기적 미니스턴 + 이속감소 + DoT)
       fieldEffect: 'electric',
       vfx: { cast: 'sp_lightning_strike', hit: 'sp_lightning_burst', scale: 1.5 },
     },
@@ -93,12 +94,13 @@ const volt: CharSheet = {
       initialCooldown: 4,
       damage: 40,
       range: 8,
-      stunDuration: 0.5,
+      stunDuration: 0.3,
       aoe: 0,
       projectileSpeed: 35,
       tracking: 'loose',
       windupTime: 0.2,
       recoveryTime: 0.15,
+      shock: 1.5,              // 감전 1.5초
       // 적 적중 시 인접 2명에게 연쇄 (60% 데미지). 물 위 적에게는 연쇄 범위 2배
       vfx: { cast: 'sp_lightning_burst', hit: 'spe_ltn_burst1', scale: 1.3 },
     },

@@ -56,6 +56,7 @@ const aeris: CharSheet = {
       range: 10,
       stunDuration: 0.4,
       aoe: 3,
+      blind: 1.5,             // 시야차단 1.5초 (시야축소 + 35% 빗나감)
       projectileSpeed: 20,
       tracking: 'none',
       windupTime: 0.12,
@@ -125,6 +126,7 @@ const aeris: CharSheet = {
     stunDuration: 2.0,
     effects: {
       pull: 5,
+      blind: 2.5,             // 시야차단 2.5초
     },
     vfx: { cast: 'cm_vortex', hit: 'fz_tornado', scale: 1.5 },
   },
