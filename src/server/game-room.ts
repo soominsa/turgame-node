@@ -44,7 +44,9 @@ export interface MatchEndReport {
     totalTicks: number;
     isHuman: boolean;
     isNft: boolean;
+    element?: string;
   }[];
+  eventCounters?: import('@engine/game-engine-types.js').MatchEventCounters;
 }
 
 // FIELD_W, FIELD_H, SPAWN_A, SPAWN_B는 shared/map-data.ts에서 import
@@ -589,6 +591,7 @@ export class GameRoom {
           isNft: me.isNft,
           element: me.element,
         })),
+        eventCounters: this.engine.state.eventCounters,
       };
 
       if (this.onMatchEnd) {

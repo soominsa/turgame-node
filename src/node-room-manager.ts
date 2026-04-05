@@ -154,6 +154,7 @@ export class NodeRoomManager {
         durationSec: report.durationSec,
         matchMode: report.matchMode,
         players: report.players,
+        eventCounters: report.eventCounters,
       });
     };
 
