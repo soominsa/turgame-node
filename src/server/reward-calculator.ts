@@ -8,7 +8,7 @@
  *   - AI 위임 단계별 감소 (봇 방지)
  */
 
-import type { Entity } from '../shared/combat-entities.js';
+import type { Entity } from '@shared/combat-entities.js';
 
 // ─── 상수 ───
 

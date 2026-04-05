@@ -3,20 +3,20 @@
  */
 
 import { WebSocket } from 'ws';
-import { Entity } from '../shared/combat-entities.js';
-import type { SigilEffect } from '../shared/rune/sigil-types.js';
-import type { GlyphEffect } from '../shared/rune/glyph-types.js';
-import { GameEngine, CapturePoint, Wall, ResourceTerrain } from '../game/game-engine.js';
-import { runAI, clearAIStrategies } from '../game/ai-module.js';
-import { createFieldGrid } from '../core/tick-engine.js';
+import { Entity } from '@shared/combat-entities.js';
+import type { SigilEffect } from '@shared/rune/sigil-types.js';
+import type { GlyphEffect } from '@shared/rune/glyph-types.js';
+import { GameEngine, CapturePoint, Wall, ResourceTerrain } from '@engine/game-engine.js';
+import { runAI, clearAIStrategies } from '@engine/ai-module.js';
+import { createFieldGrid } from '@physics/tick-engine.js';
 // materials import 제거됨 — generateFieldTerrain()이 map-data에서 처리
 import {
   LobbyPlayer, S2C, C2S, CompactEntity, CompactProjectile,
   CompactTelegraph, CompactPoint, CompactSkill, GameEvent,
   SerializedCell, TileChange, round2,
-} from '../shared/protocol.js';
-import { FIELD_W, FIELD_H, SPAWN_A, SPAWN_B, createPoints as mapPoints, createWalls as mapWalls, createTerrains as mapTerrains, generateFieldTerrain } from '../shared/map-data.js';
-import { ALL_CHARS, pickBalancedTeam, SHEETS } from '../shared/char-defs.js';
+} from '@shared/protocol.js';
+import { FIELD_W, FIELD_H, SPAWN_A, SPAWN_B, createPoints as mapPoints, createWalls as mapWalls, createTerrains as mapTerrains, generateFieldTerrain } from '@shared/map-data.js';
+import { ALL_CHARS, pickBalancedTeam, SHEETS } from '@shared/char-defs.js';
 import { calculateRewards, toMatchEntity, type PlayerReward, type EntityExtras } from './reward-calculator.js';
 
 /** 매치 종료 리포트 (노드 → 중앙서버 전달용) */
@@ -26,6 +26,7 @@ export interface MatchEndReport {
   scoreA: number;
   scoreB: number;
   durationSec: number;
+  matchMode?: MatchMode;
   players: {
     wallet: string;
     entityId: string;
@@ -103,6 +104,10 @@ export class GameRoom {
   onMatchEnd?: (report: MatchEndReport) => void;
   /** NFT 캐릭터 보유 맵 (wallet → Set<characterId>). 외부에서 주입 (B-2 연동) */
   nftCharacters = new Map<string, Set<string>>();
+  /** 룬전 데이터 fetch 콜백 (NodeRoomManager에서 주입) */
+  onFetchRuneData?: (players: Array<{ wallet: string; characterId: string; element?: string; combatRole?: string }>) => Promise<Record<string, any> | null>;
+  /** 글리프 소멸 콜백 (매치 종료 시) */
+  onConsumeGlyphs?: (wallets: string[]) => Promise<void>;
 
   constructor(id: string) {
     this.id = id;
@@ -198,7 +203,7 @@ export class GameRoom {
           this.send(player.ws, { type: 'error', msg: '호스트만 시작할 수 있습니다' });
           return;
         }
-        this.startGame();
+        this.prepareAndStart();
         break;
 
       case 'input':
@@ -222,6 +227,47 @@ export class GameRoom {
   /** 룬전 데이터 설정 (매치 시작 전 호출) */
   setPlayerRuneData(wallet: string, data: PlayerRuneData) {
     this.playerRuneData.set(wallet, data);
+  }
+
+  // ─── 게임 시작 준비 (룬전 데이터 로딩 포함) ───
+
+  private async prepareAndStart() {
+    // 룬전 모드: 중앙서버에서 시길/글리프 데이터 가져오기
+    const isRuneMode = this.matchMode === 'runed' || this.matchMode === 'ranked_runed';
+    if (isRuneMode && this.onFetchRuneData) {
+      const runeQueries = this.players.map(p => {
+        const charId = p.charIndex >= 0 ? SHEETS[p.charIndex]?.id : undefined;
+        const sheet = p.charIndex >= 0 ? SHEETS[p.charIndex] : undefined;
+        return {
+          wallet: p.wallet,
+          characterId: charId ?? '',
+          element: (sheet as any)?.element ?? 'fire',
+          combatRole: (sheet as any)?.role ?? 'ranged',
+        };
+      }).filter(q => q.characterId);
+
+      try {
+        const data = await this.onFetchRuneData(runeQueries);
+        if (data) {
+          for (const [wallet, runeData] of Object.entries(data)) {
+            const sigilEffects = new Map<string, SigilEffect>();
+            if (runeData.sigilEffects) {
+              for (const [charId, effect] of Object.entries(runeData.sigilEffects)) {
+                sigilEffects.set(charId, effect as SigilEffect);
+              }
+            }
+            this.setPlayerRuneData(wallet, {
+              wallet,
+              sigilEffects,
+              glyphEffects: runeData.glyphEffects ?? [],
+            });
+          }
+        }
+      } catch (e) {
+        console.error(`[Room ${this.id}] 룬 데이터 로딩 실패:`, e);
+      }
+    }
+    this.startGame();
   }
 
   // ─── 게임 시작 ───
@@ -498,7 +544,13 @@ export class GameRoom {
             r.seed = Math.round(r.seed * RUNE_REWARD_MULT);
           }
         }
-        // 글리프 소멸 (playerRuneData 정리)
+        // 글리프 소멸 — 중앙서버에 DB 삭제 요청
+        const runeWallets = [...this.playerRuneData.keys()];
+        if (runeWallets.length > 0 && this.onConsumeGlyphs) {
+          this.onConsumeGlyphs(runeWallets).catch(e =>
+            console.error(`[Room ${this.id}] 글리프 소멸 실패:`, e)
+          );
+        }
         this.playerRuneData.clear();
       }
 
@@ -517,6 +569,7 @@ export class GameRoom {
         scoreA: this.engine.state.scoreA,
         scoreB: this.engine.state.scoreB,
         durationSec,
+        matchMode: this.matchMode,
         players: matchEntities.map(me => ({
           wallet: entityToWallet.get(me.id) ?? '',
           entityId: me.id,

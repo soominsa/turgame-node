@@ -10,7 +10,7 @@ import {
   type NodeRegistration, type NodeHeartbeat, type NodeRoomInfo,
   type MatchResultReport, type MatchPlayerReport,
   type ApiResponse, type RegisterResponse, type MatchRewardResponse,
-} from './shared/cluster-protocol.js';
+} from '@shared/cluster-protocol.js';
 
 export class NodeClient {
   private config: NodeConfig;
@@ -109,6 +109,28 @@ export class NodeClient {
     } catch (e: any) {
       console.error(`[NodeClient] 매치 결과 전송 실패: ${e.message}`);
       return null;
+    }
+  }
+
+  // ─── 룬 데이터 조회 (매치 시작 전) ───
+
+  async fetchRuneData(players: Array<{ wallet: string; characterId: string; element?: string; combatRole?: string }>): Promise<Record<string, any> | null> {
+    try {
+      const res = await this.post<{ data: Record<string, any> }>('/api/rune/rune-data', { players });
+      if (res.ok && res.data) return res.data;
+      return null;
+    } catch (e: any) {
+      console.error(`[NodeClient] 룬 데이터 조회 실패: ${e.message}`);
+      return null;
+    }
+  }
+
+  /** 매치 종료 시 글리프 소멸 요청 */
+  async consumeGlyphs(wallets: string[]): Promise<void> {
+    try {
+      await this.post('/api/rune/consume-glyphs', { wallets });
+    } catch (e: any) {
+      console.error(`[NodeClient] 글리프 소멸 요청 실패: ${e.message}`);
     }
   }
 

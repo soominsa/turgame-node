@@ -5,11 +5,11 @@
  * ForTem 연동은 시길 NFT 민팅 요청만 처리 (실제 민팅은 중앙서버에서).
  */
 
-import type { Sigil, SigilGrade, SigilElement, SigilStatKey } from '../shared/rune/sigil-types.js';
-import type { Glyph, GlyphGrade, GlyphTypeId } from '../shared/rune/glyph-types.js';
-import { forgeSigil, type MaterialBalance } from '../shared/rune/sigil-forge.js';
-import { forgeGlyph } from '../shared/rune/glyph-forge.js';
-import { calculateSigilEffect, type CharacterRuneInfo } from '../shared/rune/sigil-synergy.js';
+import type { Sigil, SigilGrade, SigilElement, SigilStatKey } from '@shared/rune/sigil-types.js';
+import type { Glyph, GlyphGrade, GlyphTypeId } from '@shared/rune/glyph-types.js';
+import { forgeSigil, type MaterialBalance } from '@shared/rune/sigil-forge.js';
+import { forgeGlyph } from '@shared/rune/glyph-forge.js';
+import { calculateSigilEffect, type CharacterRuneInfo } from '@shared/rune/sigil-synergy.js';
 
 // ── DB 인터페이스 (실제 구현은 중앙서버에서 SQLite/Postgres 제공) ──
 
@@ -36,7 +36,7 @@ export interface RuneDB {
   deleteEquippedGlyphs(wallet: string): Promise<void>;
   // 재료
   getMaterials(wallet: string): Promise<MaterialBalance>;
-  deductMaterials(wallet: string, cost: { wood: number; heat: number; water: number }): Promise<void>;
+  deductMaterials(wallet: string, cost: { wood: number; soil: number }): Promise<void>;
 }
 
 // ── API 핸들러 ──

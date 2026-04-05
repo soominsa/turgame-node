@@ -7,9 +7,16 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "..",
     "sourceMap": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../packages/game-core/src/shared/*"],
+      "@physics/*": ["../packages/game-core/src/physics/*"],
+      "@engine/*": ["../packages/game-core/src/engine/*"]
+    }
   },
-  "include": ["src"]
+  "include": ["src", "../packages/game-core/src"]
 }

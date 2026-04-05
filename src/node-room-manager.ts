@@ -8,8 +8,8 @@
 import { WebSocket } from 'ws';
 import { GameRoom, type RoomPhase } from './server/game-room.js';
 import { NodeClient } from './node-client.js';
-import { verifyTicket, type JoinTicket, type NodeRoomInfo, type MatchPlayerReport } from './shared/cluster-protocol.js';
-import type { C2S, S2C } from './shared/protocol.js';
+import { verifyTicket, type JoinTicket, type NodeRoomInfo, type MatchPlayerReport } from '@shared/cluster-protocol.js';
+import type { C2S, S2C } from '@shared/protocol.js';
 
 interface NodeConn {
   ws: WebSocket;
@@ -129,6 +129,11 @@ export class NodeRoomManager {
       return;
     }
 
+    // NFT 캐릭터 정보 주입
+    if (ticket.nftCharIds?.length && conn.wallet) {
+      room.nftCharacters.set(conn.wallet, new Set(ticket.nftCharIds));
+    }
+
     conn.roomId = roomId;
     console.log(`[NodeRoom] 플레이어 입장: ${conn.nickname} → room ${roomId}`);
   }
@@ -147,9 +152,16 @@ export class NodeRoomManager {
         scoreA: report.scoreA,
         scoreB: report.scoreB,
         durationSec: report.durationSec,
+        matchMode: report.matchMode,
         players: report.players,
       });
     };
+
+    // 룬 데이터 fetch 콜백 (룬전 시작 전 중앙서버에서 가져옴)
+    room.onFetchRuneData = (players) => this.client.fetchRuneData(players);
+
+    // 글리프 소멸 콜백 (매치 종료 시)
+    room.onConsumeGlyphs = (wallets) => this.client.consumeGlyphs(wallets);
 
     room.onEmpty = () => {
       this.rooms.delete(roomId);
