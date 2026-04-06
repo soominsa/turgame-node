@@ -54,14 +54,14 @@ export async function handleForgeSigil(
   grade: SigilGrade,
   hasNftCharacter: boolean,
   totalMatches: number,
-  totalHeat: number,
+  totalSeed: number,
 ) {
   const materials = await ctx.db.getMaterials(wallet);
   const serverNonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
   const { sigil, cost } = forgeSigil({
     wallet, grade, materials, serverNonce,
-    hasNftCharacter, totalMatches, totalHeat,
+    hasNftCharacter, totalMatches, totalSeed,
   });
 
   await ctx.db.deductMaterials(wallet, cost);
